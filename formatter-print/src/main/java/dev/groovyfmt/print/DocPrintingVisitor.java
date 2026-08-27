@@ -105,7 +105,6 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         Doc modifiers = printClassOrInterfaceModifiersOpt(ctx.classOrInterfaceModifiersOpt());
         if (modifiers != null) {
             parts.add(modifiers);
-            parts.add(text(" "));
         }
         parts.add(visit(ctx.classDeclaration()));
         return concat(parts);
@@ -128,33 +127,98 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
             throw unsupported(ctx, "annotation type declarations");
         }
 
-        if (ctx.EXTENDS() != null
-                || ctx.IMPLEMENTS() != null
-                || ctx.PERMITS() != null
-                || ctx.typeParameters() != null
-                || ctx.formalParameters() != null) {
-            throw unsupported(ctx, "extends/implements/permits/generics/record headers on class declarations");
+        if (ctx.ps != null) {
+            throw unsupported(ctx, "sealed class 'permits' clauses");
         }
 
         header.add(text(ctx.identifier().getText()));
+        if (ctx.typeParameters() != null) {
+            header.add(printTypeParameters(ctx.typeParameters()));
+        }
+        if (ctx.formalParameters() != null) {
+            header.add(printFormalParameters(ctx.formalParameters()));
+        }
+        if (ctx.scs != null) {
+            header.add(text(" extends "));
+            header.add(printTypeList(ctx.scs));
+        }
+        if (ctx.is != null) {
+            header.add(text(" implements "));
+            header.add(printTypeList(ctx.is));
+        }
         header.add(text(" "));
         header.add(visit(ctx.classBody()));
         return concat(header);
     }
 
+    private Doc printTypeParameters(GroovyParser.TypeParametersContext ctx) {
+        List<Doc> params = new ArrayList<>();
+        for (GroovyParser.TypeParameterContext p : ctx.typeParameter()) {
+            params.add(printTypeParameter(p));
+        }
+        return concat(text("<"), join(text(", "), params), text(">"));
+    }
+
+    private Doc printTypeParameter(GroovyParser.TypeParameterContext ctx) {
+        requireNoAnnotations(ctx.annotationsOpt(), ctx);
+        Doc name = text(ctx.className().getText());
+        if (ctx.typeBound() == null) {
+            return name;
+        }
+        List<Doc> bounds = new ArrayList<>();
+        for (GroovyParser.TypeContext t : ctx.typeBound().type()) {
+            bounds.add(printType(t));
+        }
+        return concat(name, text(" extends "), join(text(" & "), bounds));
+    }
+
+    private Doc printTypeList(GroovyParser.TypeListContext ctx) {
+        List<Doc> types = new ArrayList<>();
+        for (GroovyParser.TypeContext t : ctx.type()) {
+            types.add(printType(t));
+        }
+        return join(text(", "), types);
+    }
+
     @Override
     public Doc visitClassBody(GroovyParser.ClassBodyContext ctx) {
-        if (ctx.enumConstants() != null) {
-            throw unsupported(ctx, "enum constants");
-        }
         List<CommentAttacher.Item> items = commentAttacher.attach(
                 ctx.classBodyDeclaration(),
                 ctx.LBRACE().getSymbol().getTokenIndex(),
                 ctx.RBRACE().getSymbol().getTokenIndex());
-        if (items.isEmpty()) {
+        Doc enumConstants = ctx.enumConstants() == null ? null : printEnumConstants(ctx.enumConstants());
+
+        if (enumConstants == null && items.isEmpty()) {
             return text("{}");
         }
-        return concat(text("{"), indent(concat(HARDLINE, printAttachedItems(items))), HARDLINE, text("}"));
+        List<Doc> bodyParts = new ArrayList<>();
+        if (enumConstants != null) {
+            bodyParts.add(enumConstants);
+        }
+        if (!items.isEmpty()) {
+            if (enumConstants != null) {
+                bodyParts.add(concat(HARDLINE, HARDLINE));
+            }
+            bodyParts.add(printAttachedItems(items));
+        }
+        return concat(text("{"), indent(concat(HARDLINE, concat(bodyParts))), HARDLINE, text("}"));
+    }
+
+    private Doc printEnumConstants(GroovyParser.EnumConstantsContext ctx) {
+        List<Doc> constants = new ArrayList<>();
+        for (GroovyParser.EnumConstantContext c : ctx.enumConstant()) {
+            constants.add(printEnumConstant(c));
+        }
+        return group(join(concat(text(","), LINE), constants));
+    }
+
+    private Doc printEnumConstant(GroovyParser.EnumConstantContext ctx) {
+        if (ctx.anonymousInnerClassDeclaration() != null) {
+            throw unsupported(ctx, "enum constants with class bodies");
+        }
+        requireNoAnnotations(ctx.annotationsOpt(), ctx);
+        Doc name = text(ctx.identifier().getText());
+        return ctx.arguments() == null ? name : concat(name, printArguments(ctx.arguments()));
     }
 
     @Override
@@ -178,7 +242,6 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
             Doc modifiers = printModifiersOpt(ctx.modifiersOpt());
             if (modifiers != null) {
                 parts.add(modifiers);
-                parts.add(text(" "));
             }
             parts.add(visit(ctx.classDeclaration()));
             return concat(parts);
@@ -190,14 +253,17 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
 
     @Override
     public Doc visitMethodDeclaration(GroovyParser.MethodDeclarationContext ctx) {
-        if (ctx.typeParameters() != null || ctx.THROWS() != null || ctx.DEFAULT() != null) {
-            throw unsupported(ctx, "generic methods, throws clauses, and annotation default values");
+        if (ctx.DEFAULT() != null) {
+            throw unsupported(ctx, "annotation default values");
         }
 
         List<Doc> parts = new ArrayList<>();
         Doc modifiers = printModifiersOpt(ctx.modifiersOpt());
         if (modifiers != null) {
             parts.add(modifiers);
+        }
+        if (ctx.typeParameters() != null) {
+            parts.add(printTypeParameters(ctx.typeParameters()));
             parts.add(text(" "));
         }
         if (ctx.returnType() != null) {
@@ -206,6 +272,10 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         }
         parts.add(text(printMethodName(ctx.methodName())));
         parts.add(printFormalParameters(ctx.formalParameters()));
+        if (ctx.THROWS() != null) {
+            parts.add(text(" throws "));
+            parts.add(printQualifiedClassNameList(ctx.qualifiedClassNameList()));
+        }
 
         if (ctx.methodBody() == null) {
             parts.add(text(";"));
@@ -214,6 +284,15 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         parts.add(text(" "));
         parts.add(visit(ctx.methodBody()));
         return concat(parts);
+    }
+
+    private Doc printQualifiedClassNameList(GroovyParser.QualifiedClassNameListContext ctx) {
+        List<Doc> types = new ArrayList<>();
+        for (GroovyParser.AnnotatedQualifiedClassNameContext t : ctx.annotatedQualifiedClassName()) {
+            requireNoAnnotations(t.annotationsOpt(), t);
+            types.add(text(t.qualifiedClassName().getText()));
+        }
+        return join(text(", "), types);
     }
 
     @Override
@@ -239,7 +318,6 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         List<Doc> parts = new ArrayList<>();
         if (ctx.modifiers() != null) {
             parts.add(printModifiers(ctx.modifiers()));
-            parts.add(text(" "));
         }
         if (ctx.type() != null) {
             parts.add(printType(ctx.type()));
@@ -312,9 +390,6 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
     }
 
     private Doc printFormalParameter(GroovyParser.FormalParameterContext ctx) {
-        if (ctx.ELLIPSIS() != null) {
-            throw unsupported(ctx, "varargs parameters");
-        }
         if (ctx.ASSIGN() != null) {
             throw unsupported(ctx, "parameter default values");
         }
@@ -325,12 +400,17 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         }
         if (ctx.type() != null) {
             parts.add(printType(ctx.type()));
+        }
+        if (ctx.ELLIPSIS() != null) {
+            parts.add(text("..."));
+        }
+        if (ctx.type() != null || ctx.ELLIPSIS() != null) {
             parts.add(text(" "));
         }
-        // An untyped parameter with no modifiers (e.g. closure params `{ a, b -> ... }`, or a
-        // method param declared without a type) is written bare — Groovy formal parameters don't
-        // need (and don't accept) 'def' as a type placeholder the way local variable/field
-        // declarations do.
+        // An untyped, non-varargs parameter with no modifiers (e.g. closure params
+        // `{ a, b -> ... }`, or a method param declared without a type) is written bare — Groovy
+        // formal parameters don't need (and don't accept) 'def' as a type placeholder the way
+        // local variable/field declarations do.
         parts.add(text(ctx.variableDeclaratorId().identifier().getText()));
         return concat(parts);
     }
@@ -341,18 +421,58 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         if (ctx == null || ctx.classOrInterfaceModifiers() == null) {
             return null;
         }
+        // Includes its own trailing separator after every modifier (including the last) — an
+        // annotation always goes on its own line (the conventional style for @Override,
+        // @Deprecated, ...), a plain keyword modifier (public/static/...) just gets a space.
         List<Doc> parts = new ArrayList<>();
         for (GroovyParser.ClassOrInterfaceModifierContext m : ctx.classOrInterfaceModifiers().classOrInterfaceModifier()) {
             parts.add(printClassOrInterfaceModifier(m));
+            parts.add(m.annotation() != null ? HARDLINE : text(" "));
         }
-        return join(text(" "), parts);
+        return concat(parts);
     }
 
     private Doc printClassOrInterfaceModifier(GroovyParser.ClassOrInterfaceModifierContext ctx) {
         if (ctx.annotation() != null) {
-            throw unsupported(ctx, "annotations");
+            return printAnnotation(ctx.annotation());
         }
         return text(ctx.getText());
+    }
+
+    private Doc printAnnotation(GroovyParser.AnnotationContext ctx) {
+        Doc name = concat(text("@"), text(ctx.annotationName().getText()));
+        return ctx.elementValues() == null ? name : concat(name, printElementValues(ctx.elementValues()));
+    }
+
+    private Doc printElementValues(GroovyParser.ElementValuesContext ctx) {
+        if (ctx.elementValuePairs() != null) {
+            List<Doc> pairs = new ArrayList<>();
+            for (GroovyParser.ElementValuePairContext p : ctx.elementValuePairs().elementValuePair()) {
+                pairs.add(printElementValuePair(p));
+            }
+            return concat(text("("), join(text(", "), pairs), text(")"));
+        }
+        return concat(text("("), printElementValue(ctx.elementValue()), text(")"));
+    }
+
+    private Doc printElementValuePair(GroovyParser.ElementValuePairContext ctx) {
+        GroovyParser.ElementValuePairNameContext nameCtx = ctx.elementValuePairName();
+        String name = nameCtx.identifier() != null ? nameCtx.identifier().getText() : nameCtx.keywords().getText();
+        return concat(text(name), text(" = "), printElementValue(ctx.elementValue()));
+    }
+
+    private Doc printElementValue(GroovyParser.ElementValueContext ctx) {
+        if (ctx.expression() != null) {
+            return visit(ctx.expression());
+        }
+        if (ctx.annotation() != null) {
+            return printAnnotation(ctx.annotation());
+        }
+        List<Doc> values = new ArrayList<>();
+        for (GroovyParser.ElementValueContext v : ctx.elementValueArrayInitializer().elementValue()) {
+            values.add(printElementValue(v));
+        }
+        return concat(text("["), join(text(", "), values), text("]"));
     }
 
     private Doc printModifiersOpt(GroovyParser.ModifiersOptContext ctx) {
@@ -363,11 +483,15 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
     }
 
     private Doc printModifiers(GroovyParser.ModifiersContext ctx) {
+        // Includes its own trailing separator after every modifier (including the last) — see
+        // printClassOrInterfaceModifiersOpt for why.
         List<Doc> parts = new ArrayList<>();
         for (GroovyParser.ModifierContext m : ctx.modifier()) {
+            boolean isAnnotation = m.classOrInterfaceModifier() != null && m.classOrInterfaceModifier().annotation() != null;
             parts.add(printModifier(m));
+            parts.add(isAnnotation ? HARDLINE : text(" "));
         }
-        return join(text(" "), parts);
+        return concat(parts);
     }
 
     private Doc printModifier(GroovyParser.ModifierContext ctx) {
@@ -380,35 +504,62 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
     private Doc printVariableModifiers(GroovyParser.VariableModifiersContext ctx) {
         List<Doc> parts = new ArrayList<>();
         for (GroovyParser.VariableModifierContext m : ctx.variableModifier()) {
-            if (m.annotation() != null) {
-                throw unsupported(m, "annotations");
-            }
-            parts.add(text(m.getText()));
+            parts.add(m.annotation() != null ? printAnnotation(m.annotation()) : text(m.getText()));
         }
         return join(text(" "), parts);
     }
 
     private Doc printType(GroovyParser.TypeContext ctx) {
-        requireNoAnnotations(ctx.annotationsOpt(), ctx);
+        Doc annotations = printAnnotationsOptInline(ctx.annotationsOpt());
         if (ctx.VOID() != null) {
-            return text("void");
+            return concat(annotations, text("void"));
         }
-        StringBuilder sb = new StringBuilder();
-        if (ctx.primitiveType() != null) {
-            sb.append(ctx.primitiveType().getText());
-        } else {
-            GroovyParser.ClassOrInterfaceTypeContext coi = ctx.classOrInterfaceType();
-            if (coi.typeArguments() != null) {
-                throw unsupported(coi, "generic type arguments");
-            }
-            sb.append(coi.qualifiedClassName() != null
-                    ? coi.qualifiedClassName().getText()
-                    : coi.qualifiedStandardClassName().getText());
+        Doc base = ctx.primitiveType() != null
+                ? text(ctx.primitiveType().getText())
+                : printClassOrInterfaceType(ctx.classOrInterfaceType());
+        Doc dims = ctx.emptyDimsOpt().emptyDims() != null ? text(ctx.emptyDimsOpt().emptyDims().getText()) : NIL;
+        return concat(annotations, base, dims);
+    }
+
+    private Doc printClassOrInterfaceType(GroovyParser.ClassOrInterfaceTypeContext ctx) {
+        String name = ctx.qualifiedClassName() != null
+                ? ctx.qualifiedClassName().getText()
+                : ctx.qualifiedStandardClassName().getText();
+        return ctx.typeArguments() == null ? text(name) : concat(text(name), printTypeArguments(ctx.typeArguments()));
+    }
+
+    private Doc printTypeArguments(GroovyParser.TypeArgumentsContext ctx) {
+        List<Doc> args = new ArrayList<>();
+        for (GroovyParser.TypeArgumentContext a : ctx.typeArgument()) {
+            args.add(printTypeArgument(a));
         }
-        if (ctx.emptyDimsOpt().emptyDims() != null) {
-            sb.append(ctx.emptyDimsOpt().emptyDims().getText());
+        return concat(text("<"), join(text(", "), args), text(">"));
+    }
+
+    private Doc printTypeArgument(GroovyParser.TypeArgumentContext ctx) {
+        requireNoAnnotations(ctx.annotationsOpt(), ctx);
+        if (ctx.QUESTION() == null) {
+            return printType(ctx.type());
         }
-        return text(sb.toString());
+        if (ctx.EXTENDS() != null) {
+            return concat(text("? extends "), printType(ctx.type()));
+        }
+        if (ctx.SUPER() != null) {
+            return concat(text("? super "), printType(ctx.type()));
+        }
+        return text("?");
+    }
+
+    private Doc printAnnotationsOptInline(GroovyParser.AnnotationsOptContext ctx) {
+        if (ctx == null || ctx.annotation().isEmpty()) {
+            return NIL;
+        }
+        List<Doc> parts = new ArrayList<>();
+        for (GroovyParser.AnnotationContext a : ctx.annotation()) {
+            parts.add(printAnnotation(a));
+            parts.add(text(" "));
+        }
+        return concat(parts);
     }
 
     private Doc printQualifiedName(GroovyParser.QualifiedNameContext ctx) {
@@ -1014,12 +1165,14 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
             throw unsupported(ctx, "array creation expressions");
         }
         GroovyParser.CreatedNameContext name = ctx.createdName();
-        if (name.typeArgumentsOrDiamond() != null) {
-            throw unsupported(ctx, "generic type arguments on 'new' expressions");
-        }
         String typeName =
                 name.primitiveType() != null ? name.primitiveType().getText() : name.qualifiedClassName().getText();
-        return concat(text("new "), text(typeName), printArguments(ctx.arguments()));
+        Doc typeArgs = name.typeArgumentsOrDiamond() == null ? NIL : printTypeArgumentsOrDiamond(name.typeArgumentsOrDiamond());
+        return concat(text("new "), text(typeName), typeArgs, printArguments(ctx.arguments()));
+    }
+
+    private Doc printTypeArgumentsOrDiamond(GroovyParser.TypeArgumentsOrDiamondContext ctx) {
+        return ctx.typeArguments() == null ? text("<>") : printTypeArguments(ctx.typeArguments());
     }
 
     @Override
