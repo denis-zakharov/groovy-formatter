@@ -382,11 +382,13 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         for (GroovyParser.FormalParameterContext p : list.formalParameter()) {
             paramDocs.add(printFormalParameter(p));
         }
+        // Unlike argument lists / list / map literals, a formal parameter list does NOT accept a
+        // trailing comma in Groovy's grammar — adding one here (as those other call sites
+        // correctly do) produces output that Groovy's own parser rejects on re-read.
         return group(
                 concat(
                         text("("),
                         indent(concat(SOFTLINE, join(concat(text(","), LINE), paramDocs))),
-                        ifBreak(text(","), NIL),
                         SOFTLINE,
                         text(")")));
     }
@@ -1000,6 +1002,29 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
     }
 
     @Override
+    public Doc visitMultipleAssignmentExprAlt(GroovyParser.MultipleAssignmentExprAltContext ctx) {
+        // The def-less form of tuple destructuring, e.g. '(a, b) = [1, 2]' — the 'def (a, b) = ...'
+        // declaration form is already guarded (VariableDeclarationContext.typeNamePairs()); this is
+        // the separate bare-assignment expression form, equally unsupported for now.
+        throw unsupported(ctx, "multiple-assignment / tuple destructuring");
+    }
+
+    @Override
+    public Doc visitCastExprAlt(GroovyParser.CastExprAltContext ctx) {
+        return concat(text("("), printType(ctx.castParExpression().type()), text(") "), visit(ctx.expression()));
+    }
+
+    @Override
+    public Doc visitPowerExprAlt(GroovyParser.PowerExprAltContext ctx) {
+        return binaryDoc(visit(ctx.left), ctx.op.getText(), visit(ctx.right));
+    }
+
+    @Override
+    public Doc visitRegexExprAlt(GroovyParser.RegexExprAltContext ctx) {
+        return binaryDoc(visit(ctx.left), ctx.op.getText(), visit(ctx.right));
+    }
+
+    @Override
     public Doc visitAdditiveExprAlt(GroovyParser.AdditiveExprAltContext ctx) {
         return binaryDoc(visit(ctx.left), ctx.op.getText(), visit(ctx.right));
     }
@@ -1012,13 +1037,29 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
     @Override
     public Doc visitRelationalExprAlt(GroovyParser.RelationalExprAltContext ctx) {
         if (ctx.type() != null) {
-            throw unsupported(ctx, "'instanceof'/'as' type expressions");
+            String op = ctx.AS() != null ? "as" : ctx.NOT_INSTANCEOF() != null ? "!instanceof" : "instanceof";
+            return binaryDoc(visit(ctx.left), op, printType(ctx.type()));
         }
         return binaryDoc(visit(ctx.left), ctx.op.getText(), visit(ctx.right));
     }
 
     @Override
     public Doc visitEqualityExprAlt(GroovyParser.EqualityExprAltContext ctx) {
+        return binaryDoc(visit(ctx.left), ctx.op.getText(), visit(ctx.right));
+    }
+
+    @Override
+    public Doc visitAndExprAlt(GroovyParser.AndExprAltContext ctx) {
+        return binaryDoc(visit(ctx.left), ctx.op.getText(), visit(ctx.right));
+    }
+
+    @Override
+    public Doc visitExclusiveOrExprAlt(GroovyParser.ExclusiveOrExprAltContext ctx) {
+        return binaryDoc(visit(ctx.left), ctx.op.getText(), visit(ctx.right));
+    }
+
+    @Override
+    public Doc visitInclusiveOrExprAlt(GroovyParser.InclusiveOrExprAltContext ctx) {
         return binaryDoc(visit(ctx.left), ctx.op.getText(), visit(ctx.right));
     }
 
@@ -1334,8 +1375,12 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
     public Doc visitClosure(GroovyParser.ClosureContext ctx) {
         Doc header = NIL;
         if (ctx.ARROW() != null) {
-            Doc params = ctx.formalParameterList() == null ? NIL : printCommaJoinedParams(ctx.formalParameterList());
-            header = concat(text(" "), params, text(" ->"));
+            // A zero-param explicit-arrow closure (`{ -> expr }`) has no params doc to put a
+            // leading space before — only emit it when there actually are params, or this
+            // produces a stray double space ("{  -> expr }").
+            header = ctx.formalParameterList() == null
+                    ? text(" ->")
+                    : concat(text(" "), printCommaJoinedParams(ctx.formalParameterList()), text(" ->"));
         }
 
         List<? extends GroovyParser.BlockStatementContext> statements =

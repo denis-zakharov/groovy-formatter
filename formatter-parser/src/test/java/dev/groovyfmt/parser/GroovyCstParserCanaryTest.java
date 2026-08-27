@@ -1,6 +1,7 @@
 package dev.groovyfmt.parser;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import groovyjarjarantlr4.v4.runtime.CommonTokenStream;
@@ -57,5 +58,27 @@ class GroovyCstParserCanaryTest {
 
         assertEquals(1, commentTokens.size());
         assertTrue(commentTokens.get(0).getText().contains("inline"));
+    }
+
+    @Test
+    void throwsAClearParseExceptionForInvalidSyntaxInsteadOfSilentlyRecovering() {
+        // ANTLR's DefaultErrorStrategy recovers from a syntax error and keeps parsing, producing a
+        // best-effort (partially garbage) tree, rather than throwing — found via a corpus survey
+        // where malformed/unsupported-syntax input silently produced corrupted output instead of a
+        // clear failure. GroovyCstParser must convert any recorded syntax error into an exception.
+        String source = "class Foo {\n  def bar( {\n    return 1\n  }\n}\n";
+        GroovyParseException e = assertThrows(GroovyParseException.class, () -> GroovyCstParser.parse(source));
+        assertTrue(e.getMessage().contains("syntax error"));
+    }
+
+    @Test
+    void parsesValidSourceWithoutThrowingDespiteTheStricterErrorListener() {
+        // Guards against the error listener being too strict and rejecting legitimate Groovy.
+        assertEquals(
+                "CompilationUnitContext",
+                GroovyCstParser.parse("class Foo {\n  def bar() {\n    return 1\n  }\n}\n")
+                        .compilationUnit()
+                        .getClass()
+                        .getSimpleName());
     }
 }

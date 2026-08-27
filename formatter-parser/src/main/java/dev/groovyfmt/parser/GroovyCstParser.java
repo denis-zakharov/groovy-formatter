@@ -1,8 +1,13 @@
 package dev.groovyfmt.parser;
 
+import groovyjarjarantlr4.v4.runtime.ANTLRErrorListener;
 import groovyjarjarantlr4.v4.runtime.CharStream;
 import groovyjarjarantlr4.v4.runtime.CharStreams;
 import groovyjarjarantlr4.v4.runtime.CommonTokenStream;
+import groovyjarjarantlr4.v4.runtime.RecognitionException;
+import groovyjarjarantlr4.v4.runtime.Recognizer;
+import java.util.ArrayList;
+import java.util.List;
 import org.apache.groovy.parser.antlr4.GroovyLangLexer;
 import org.apache.groovy.parser.antlr4.GroovyLangParser;
 import org.apache.groovy.parser.antlr4.GroovyParser;
@@ -23,13 +28,54 @@ public final class GroovyCstParser {
     public static ParsedSource parse(String source) {
         CharStream charStream = CharStreams.fromString(source);
         GroovyLangLexer lexer = new GroovyLangLexer(charStream);
+        ThrowingErrorListener lexerErrors = new ThrowingErrorListener();
+        lexer.removeErrorListeners();
+        lexer.addErrorListener(lexerErrors);
+
         CommonTokenStream tokens = new CommonTokenStream(lexer);
         // Force full tokenization up front so getTokens() contains every token, including
         // hidden-channel ones, before the parser starts consuming from the stream.
         tokens.fill();
+        lexerErrors.throwIfAny();
 
         GroovyLangParser parser = new GroovyLangParser(tokens);
+        ThrowingErrorListener parserErrors = new ThrowingErrorListener();
+        parser.removeErrorListeners();
+        parser.addErrorListener(parserErrors);
+
         GroovyParser.CompilationUnitContext cst = parser.compilationUnit();
+        // ANTLR's DefaultErrorStrategy recovers from a syntax error and keeps parsing (producing a
+        // best-effort, partially-garbage tree) rather than throwing — left unchecked, that garbage
+        // tree would silently flow into the printer and produce corrupted output instead of a
+        // clear failure. Surface any recorded errors now that parsing has finished.
+        parserErrors.throwIfAny();
+
         return new ParsedSource(cst, tokens);
+    }
+
+    // A single listener class services both the lexer (whose Recognizer is generic over Integer
+    // token-type symbols) and the parser (generic over Token symbols) by implementing
+    // ANTLRErrorListener<Object>, a supertype of both.
+    private static final class ThrowingErrorListener implements ANTLRErrorListener<Object> {
+        private final List<String> errors = new ArrayList<>();
+
+        @Override
+        public <T> void syntaxError(
+                Recognizer<T, ?> recognizer,
+                T offendingSymbol,
+                int line,
+                int charPositionInLine,
+                String msg,
+                RecognitionException e) {
+            errors.add("line " + line + ":" + charPositionInLine + " " + msg);
+        }
+
+        void throwIfAny() {
+            if (!errors.isEmpty()) {
+                throw new GroovyParseException(
+                        "groovy-formatter: input is not valid Groovy source (" + errors.size() + " syntax error(s)):\n"
+                                + String.join("\n", errors));
+            }
+        }
     }
 }
