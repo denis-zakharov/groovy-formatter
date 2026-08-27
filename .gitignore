@@ -1,6 +1,12 @@
 .gradle/
 build/
-*/build/
+target/
 .idea/
 *.iml
 out/
+
+# Eclipse Java lang server
+.settings/
+.classpath
+.project
+*.class

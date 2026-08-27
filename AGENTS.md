@@ -27,8 +27,9 @@ formatter-comments    Comment extraction + attachment (Comment, TokenStreamComme
                       CommentAttacher). Pure data — never builds a Doc, never calls the printer.
 formatter-print       DocPrintingVisitor: walks the CST, emits Doc. GroovyFormatter is the
                       public entry point.
-formatter-cli         Minimal CLI (single file -> stdout). picocli is a declared dependency but
-                      not yet wired up — Main.java is hand-rolled arg parsing.
+formatter-cli         picocli-based `groovy-format` CLI (GroovyFormatCommand + GroovyFileFinder):
+                      formats one or more files/directories with --in-place, --check,
+                      --recursive, --help, --version.
 formatter-testkit     Scaffolded, currently empty. Intended home for a vendored real-world
                       corpus + idempotency/semantic-equivalence test harness (see "Testing"
                       below) — this never got built out; see "What's missing" at the bottom.
@@ -230,6 +231,8 @@ destructuring (`def (a, b) = [...]` and the def-less form), annotation type decl
 ./gradlew build                                    # full build + all tests
 ./gradlew test                                      # all tests only
 ./gradlew :formatter-cli:run --args="path/to/File.groovy"   # format one file, prints to stdout
+./gradlew :formatter-cli:run --args="-i path/to/File.groovy"   # format in place
+./gradlew :formatter-cli:run --args="-r --check src"            # CI-style check over a directory
 ```
 
 Java 17 toolchain (set per-module via the root `build.gradle.kts` `subprojects {}` block). Pinned

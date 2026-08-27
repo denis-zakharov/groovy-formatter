@@ -35,21 +35,34 @@ try the CLI — see below.
 
 ## Usage
 
-Format a single file and print the result to stdout:
+The `groovy-format` command (`formatter-cli`) accepts one or more files or, with `--recursive`,
+directories:
 
 ```bash
-./gradlew :formatter-cli:run --args="path/to/YourFile.groovy"
+./gradlew :formatter-cli:run --args="path/to/YourFile.groovy"           # print to stdout
+./gradlew :formatter-cli:run --args="-i path/to/YourFile.groovy"        # rewrite in place
+./gradlew :formatter-cli:run --args="-r --check src"                    # CI-style check
 ```
 
-To write the formatted output back to a file yourself:
+Flags:
 
-```bash
-./gradlew :formatter-cli:run --args="path/to/YourFile.groovy" --quiet > YourFile.formatted.groovy
-```
+| Flag | Meaning |
+| --- | --- |
+| `-i, --in-place` | Write reformatted output back to each file instead of printing it. |
+| `-n, --check` | Print the paths of files that aren't already formatted and exit non-zero; nothing is written. Mutually exclusive with `-i`. |
+| `-r, --recursive` | Recurse into directory arguments, formatting every `*.groovy`, `*.gradle`, and `Jenkinsfile` file found. Skips hidden directories (`.git`, `.idea`, ...) and any directory named `build`. Without this flag, passing a directory is an error. |
+| `-h, --help` | Print usage and exit. |
+| `-V, --version` | Print the version and exit. |
 
-There is currently no `--in-place`, `--check`, or multi-file/glob support, and no standalone
-distributable binary published — invoking through `./gradlew ... run` (or building/running the
-`formatter-cli` module's own jar directly) is the only supported entry point right now.
+Exit codes: `0` on success, `1` if any file failed to format (or, under `--check`, if any file
+needs reformatting), `2` on a usage error (bad flags, or a directory passed without
+`--recursive`). A parse or unsupported-construct error in one file doesn't abort the rest of the
+batch — it's reported on stderr and the remaining files are still processed.
+
+There is no `--stdin` support and no custom include/exclude pattern configuration yet, and no
+standalone distributable binary published — invoking through `./gradlew ... run` (or
+building/running the `formatter-cli` module's own jar directly) is the only supported entry point
+right now.
 
 ### Example
 

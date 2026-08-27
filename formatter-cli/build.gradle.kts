@@ -5,6 +5,7 @@ plugins {
 
 dependencies {
     implementation(project(":formatter-print"))
+    implementation(project(":formatter-parser"))
     implementation("info.picocli:picocli:4.7.6")
 }
 
