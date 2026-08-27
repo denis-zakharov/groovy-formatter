@@ -696,6 +696,59 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
     }
 
     @Override
+    public Doc visitSwitchExprAlt(GroovyParser.SwitchExprAltContext ctx) {
+        return visit(ctx.switchExpression());
+    }
+
+    @Override
+    public Doc visitSwitchExpression(GroovyParser.SwitchExpressionContext ctx) {
+        List<? extends GroovyParser.SwitchBlockStatementExpressionGroupContext> groupCtxs =
+                ctx.switchBlockStatementExpressionGroup();
+        Doc body;
+        if (groupCtxs.isEmpty()) {
+            body = text("{}");
+        } else {
+            List<Doc> groups = new ArrayList<>();
+            for (GroovyParser.SwitchBlockStatementExpressionGroupContext g : groupCtxs) {
+                groups.add(printSwitchExpressionGroup(g));
+            }
+            body = concat(text("{"), indent(concat(HARDLINE, join(HARDLINE, groups))), HARDLINE, text("}"));
+        }
+        return concat(text("switch "), visit(ctx.expressionInPar()), text(" "), body);
+    }
+
+    private Doc printSwitchExpressionGroup(GroovyParser.SwitchBlockStatementExpressionGroupContext ctx) {
+        List<Doc> labels = new ArrayList<>();
+        for (GroovyParser.SwitchExpressionLabelContext l : ctx.switchExpressionLabel()) {
+            labels.add(printSwitchExpressionLabel(l));
+        }
+        Doc labelDoc = join(HARDLINE, labels);
+
+        if (ctx.blockStatements() == null) {
+            return labelDoc;
+        }
+        List<Doc> statements = new ArrayList<>();
+        for (GroovyParser.BlockStatementContext stmt : ctx.blockStatements().blockStatement()) {
+            statements.add(visit(stmt));
+        }
+        // A single-statement arrow case (`case 1 -> "one"`) is the conventional style and stays
+        // on one line when it fits, same rationale as single-statement closures; anything more
+        // must break (no implicit multi-statement-per-line separator).
+        if (statements.size() == 1) {
+            return group(concat(labelDoc, indent(concat(LINE, statements.get(0)))));
+        }
+        return concat(labelDoc, indent(concat(HARDLINE, join(HARDLINE, statements))));
+    }
+
+    private Doc printSwitchExpressionLabel(GroovyParser.SwitchExpressionLabelContext ctx) {
+        String terminator = ctx.ARROW() != null ? " ->" : ":";
+        if (ctx.DEFAULT() != null) {
+            return text("default" + terminator);
+        }
+        return concat(text("case "), printExpressionList(ctx.expressionList()), text(terminator));
+    }
+
+    @Override
     public Doc visitLoopStmtAlt(GroovyParser.LoopStmtAltContext ctx) {
         return visit(ctx.loopStatement());
     }
@@ -862,14 +915,51 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         return concat(parts);
     }
 
+    @Override
+    public Doc visitLabeledStmtAlt(GroovyParser.LabeledStmtAltContext ctx) {
+        return concat(text(ctx.identifier().getText()), text(":"), HARDLINE, visit(ctx.statement()));
+    }
+
+    @Override
+    public Doc visitSynchronizedStmtAlt(GroovyParser.SynchronizedStmtAltContext ctx) {
+        return concat(text("synchronized "), visit(ctx.expressionInPar()), text(" "), visit(ctx.block()));
+    }
+
+    @Override
+    public Doc visitYieldStmtAlt(GroovyParser.YieldStmtAltContext ctx) {
+        return visit(ctx.yieldStatement());
+    }
+
+    @Override
+    public Doc visitYieldStatement(GroovyParser.YieldStatementContext ctx) {
+        return concat(text("yield "), visit(ctx.expression()));
+    }
+
     // ---- Expressions -----------------------------------------------------------------------
 
     @Override
     public Doc visitEnhancedStatementExpression(GroovyParser.EnhancedStatementExpressionContext ctx) {
         if (ctx.standardLambdaExpression() != null) {
-            throw unsupported(ctx, "lambda expressions");
+            return printStandardLambdaExpression(ctx.standardLambdaExpression());
         }
         return visit(ctx.statementExpression());
+    }
+
+    private Doc printStandardLambdaExpression(GroovyParser.StandardLambdaExpressionContext ctx) {
+        Doc params = printStandardLambdaParameters(ctx.standardLambdaParameters());
+        Doc body = printLambdaBody(ctx.lambdaBody());
+        return group(concat(params, text(" ->"), indent(concat(LINE, body))));
+    }
+
+    private Doc printStandardLambdaParameters(GroovyParser.StandardLambdaParametersContext ctx) {
+        if (ctx.variableDeclaratorId() != null) {
+            return text(ctx.variableDeclaratorId().identifier().getText());
+        }
+        return printFormalParameters(ctx.formalParameters());
+    }
+
+    private Doc printLambdaBody(GroovyParser.LambdaBodyContext ctx) {
+        return ctx.block() != null ? visit(ctx.block()) : visit(ctx.statementExpression());
     }
 
     @Override
@@ -1032,8 +1122,12 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
                 connector = "*.";
             } else if (ctx.DOT() != null) {
                 connector = ".";
+            } else if (ctx.METHOD_REFERENCE() != null) {
+                connector = "::";
+            } else if (ctx.METHOD_POINTER() != null) {
+                connector = ".&";
             } else {
-                throw unsupported(ctx, "method pointer/reference path elements");
+                throw unsupported(ctx, "'new'/annotation path elements");
             }
             return concat(text(connector), text(printNamePart(ctx.namePart())));
         }
@@ -1233,10 +1327,7 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
 
     @Override
     public Doc visitClosureOrLambdaExpression(GroovyParser.ClosureOrLambdaExpressionContext ctx) {
-        if (ctx.closure() == null) {
-            throw unsupported(ctx, "Java-style lambda expressions (a -> a + 1)");
-        }
-        return visit(ctx.closure());
+        return ctx.closure() != null ? visit(ctx.closure()) : printStandardLambdaExpression(ctx.standardLambdaExpression());
     }
 
     @Override
