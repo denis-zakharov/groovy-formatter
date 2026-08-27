@@ -91,7 +91,10 @@ public final class DocRenderer {
             }
         }
 
-        return out.toString();
+        // A blank line (two consecutive newlines) would otherwise carry the next line's indent
+        // as trailing whitespace, since newline() always emits indentation eagerly rather than
+        // deferring it until real content follows.
+        return out.toString().replaceAll("(?m)[ \t]+$", "");
     }
 
     private static boolean flushLineSuffixesIfNeeded(Deque<Cmd> stack, List<Cmd> lineSuffixes, Cmd pendingBreak) {
