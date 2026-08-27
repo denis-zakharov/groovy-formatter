@@ -239,13 +239,20 @@ class GroovyFormatterTest {
     }
 
     @Test
-    void throwsAClearErrorForConstructsOutsideThePhase2Subset() {
-        // Command-chain expressions (Spock/Gradle/Jenkins-style) are explicitly out of scope
-        // until Phase 4.
-        String source = "class Foo {\n  def bar() {\n    foo bar: 1\n  }\n}\n";
+    void formatsAParenLessNamedArgumentCommandExpression() {
+        String source = "class Foo {\n    def bar() {\n        foo bar: 1, baz: 2\n    }\n}\n";
+        assertEquals(source, GroovyFormatter.format(source));
+    }
+
+    @Test
+    void throwsAClearErrorForAMultiWordCommandChainStillOutOfScope() {
+        // 'foo bar baz' (no comma, no colon) is the true multi-word command chain — a distinct,
+        // more elaborate grammar path (commandArgument()) than the paren-less named/positional
+        // argument shorthand ('foo bar: 1' / 'foo bar, baz'), which Phase 4 does support.
+        String source = "class Foo {\n  def bar() {\n    foo bar baz\n  }\n}\n";
         UnsupportedOperationException e =
                 org.junit.jupiter.api.Assertions.assertThrows(
                         UnsupportedOperationException.class, () -> GroovyFormatter.format(source));
-        org.junit.jupiter.api.Assertions.assertTrue(e.getMessage().contains("command-chain"));
+        org.junit.jupiter.api.Assertions.assertTrue(e.getMessage().contains("multi-word command-chain"));
     }
 }

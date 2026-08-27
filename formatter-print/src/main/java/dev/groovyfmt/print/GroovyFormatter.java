@@ -21,7 +21,7 @@ public final class GroovyFormatter {
         ParsedSource parsed = GroovyCstParser.parse(source);
         List<Comment> comments = TokenStreamComments.extract(parsed.tokens());
         CommentAttacher commentAttacher = new CommentAttacher(comments);
-        Doc doc = new DocPrintingVisitor(commentAttacher).visitCompilationUnit(parsed.compilationUnit());
+        Doc doc = new DocPrintingVisitor(commentAttacher, source).visitCompilationUnit(parsed.compilationUnit());
         commentAttacher.assertAllCommentsClaimed();
         String rendered = DocRenderer.render(doc, OPTIONS);
         return rendered.endsWith("\n") ? rendered : rendered + "\n";
