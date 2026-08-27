@@ -9,8 +9,10 @@ import static dev.groovyfmt.doc.Docs.group;
 import static dev.groovyfmt.doc.Docs.ifBreak;
 import static dev.groovyfmt.doc.Docs.indent;
 import static dev.groovyfmt.doc.Docs.join;
+import static dev.groovyfmt.doc.Docs.lineSuffix;
 import static dev.groovyfmt.doc.Docs.text;
 
+import dev.groovyfmt.comments.CommentAttacher;
 import dev.groovyfmt.doc.Doc;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,52 +21,53 @@ import org.apache.groovy.parser.antlr4.GroovyParserBaseVisitor;
 
 /**
  * Walks Groovy's own ANTLR4 parse tree (the CST, not a simplified semantic AST) and emits a
- * {@link Doc} tree. This is Phase 2 of the formatter's build-out: package/imports, one or more
- * top-level classes with fields and methods (no inheritance/generics), variable declarations,
- * assignment, simple/dotted method calls, {@code return}, {@code if}/{@code else}, binary
- * expressions with standard precedence, and integer/string/boolean/null literals.
+ * {@link Doc} tree. Phase 2 covers: package/imports, one or more top-level classes with fields
+ * and methods (no inheritance/generics), variable declarations, assignment, simple/dotted method
+ * calls, {@code return}, {@code if}/{@code else}, binary expressions with standard precedence,
+ * and integer/string/boolean/null literals. Phase 3 adds comment and blank-line preservation
+ * between statements/members (via {@link CommentAttacher}) — comments nested inside a single
+ * statement/expression are still out of scope and throw rather than being misplaced.
  *
- * <p>Comments and blank-line preservation land in Phase 3 — this visitor does not look at the
- * token stream at all, only the parse tree's semantic shape, so it discards {@code Nls}/{@code
- * Sep} nodes entirely and re-derives its own canonical spacing. Constructs outside the Phase 2
- * subset (command chains, generics, switch, closures, GStrings, …) throw {@link
- * UnsupportedOperationException} with a description of what's missing, rather than silently
- * dropping content.
+ * <p>Outside of comment/blank-line handling, this visitor otherwise ignores the token stream —
+ * it discards {@code Nls}/{@code Sep} nodes entirely and re-derives its own canonical spacing.
+ * Constructs outside the Phase 2 subset (command chains, generics, switch, closures, GStrings, …)
+ * throw {@link UnsupportedOperationException} with a description of what's missing, rather than
+ * silently dropping content.
  */
 final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
+
+    private final CommentAttacher commentAttacher;
+
+    DocPrintingVisitor(CommentAttacher commentAttacher) {
+        this.commentAttacher = commentAttacher;
+    }
 
     // ---- Compilation unit --------------------------------------------------------------------
 
     @Override
     public Doc visitCompilationUnit(GroovyParser.CompilationUnitContext ctx) {
-        List<Doc> sections = new ArrayList<>();
-
+        List<GroovyParser.GroovyParserRuleContext> siblings = new ArrayList<>();
         if (ctx.packageDeclaration() != null) {
-            sections.add(visit(ctx.packageDeclaration()));
+            siblings.add(ctx.packageDeclaration());
         }
-
         if (ctx.scriptStatements() != null) {
-            List<Doc> imports = new ArrayList<>();
-            List<Doc> typeDecls = new ArrayList<>();
             for (GroovyParser.ScriptStatementContext stmt : ctx.scriptStatements().scriptStatement()) {
                 if (stmt.importDeclaration() != null) {
-                    imports.add(visit(stmt.importDeclaration()));
+                    siblings.add(stmt.importDeclaration());
                 } else if (stmt.typeDeclaration() != null) {
-                    typeDecls.add(visit(stmt.typeDeclaration()));
+                    siblings.add(stmt.typeDeclaration());
                 } else {
                     throw unsupported(stmt, "top-level script statements (methods/statements outside a class)");
                 }
             }
-            if (!imports.isEmpty()) {
-                sections.add(join(HARDLINE, imports));
-            }
-            sections.addAll(typeDecls);
         }
 
-        if (sections.isEmpty()) {
+        int stopTokenIndex = ctx.EOF().getSymbol().getTokenIndex();
+        List<CommentAttacher.Item> items = commentAttacher.attach(siblings, -1, stopTokenIndex);
+        if (items.isEmpty()) {
             return NIL;
         }
-        return concat(join(concat(HARDLINE, HARDLINE), sections), HARDLINE);
+        return concat(printAttachedItems(items), HARDLINE);
     }
 
     @Override
@@ -142,19 +145,14 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         if (ctx.enumConstants() != null) {
             throw unsupported(ctx, "enum constants");
         }
-        List<? extends GroovyParser.ClassBodyDeclarationContext> decls = ctx.classBodyDeclaration();
-        if (decls.isEmpty()) {
+        List<CommentAttacher.Item> items = commentAttacher.attach(
+                ctx.classBodyDeclaration(),
+                ctx.LBRACE().getSymbol().getTokenIndex(),
+                ctx.RBRACE().getSymbol().getTokenIndex());
+        if (items.isEmpty()) {
             return text("{}");
         }
-        List<Doc> members = new ArrayList<>();
-        for (GroovyParser.ClassBodyDeclarationContext decl : decls) {
-            members.add(visit(decl));
-        }
-        return concat(
-                text("{"),
-                indent(concat(HARDLINE, join(concat(HARDLINE, HARDLINE), members))),
-                HARDLINE,
-                text("}"));
+        return concat(text("{"), indent(concat(HARDLINE, printAttachedItems(items))), HARDLINE, text("}"));
     }
 
     @Override
@@ -421,22 +419,16 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
 
     @Override
     public Doc visitBlock(GroovyParser.BlockContext ctx) {
-        List<Doc> statements = printBlockStatements(ctx.blockStatementsOpt());
-        if (statements.isEmpty()) {
+        List<? extends GroovyParser.BlockStatementContext> statements =
+                ctx.blockStatementsOpt().blockStatements() == null
+                        ? List.of()
+                        : ctx.blockStatementsOpt().blockStatements().blockStatement();
+        List<CommentAttacher.Item> items = commentAttacher.attach(
+                statements, ctx.LBRACE().getSymbol().getTokenIndex(), ctx.RBRACE().getSymbol().getTokenIndex());
+        if (items.isEmpty()) {
             return text("{}");
         }
-        return concat(text("{"), indent(concat(HARDLINE, join(HARDLINE, statements))), HARDLINE, text("}"));
-    }
-
-    private List<Doc> printBlockStatements(GroovyParser.BlockStatementsOptContext ctx) {
-        List<Doc> result = new ArrayList<>();
-        if (ctx == null || ctx.blockStatements() == null) {
-            return result;
-        }
-        for (GroovyParser.BlockStatementContext stmt : ctx.blockStatements().blockStatement()) {
-            result.add(visit(stmt));
-        }
-        return result;
+        return concat(text("{"), indent(concat(HARDLINE, printAttachedItems(items))), HARDLINE, text("}"));
     }
 
     @Override
@@ -733,6 +725,32 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
 
     private Doc binaryDoc(Doc left, String op, Doc right) {
         return group(concat(left, text(" " + op), indent(concat(LINE, right))));
+    }
+
+    // ---- Comment/blank-line interleaving --------------------------------------------------------
+
+    /** Renders a sequence of {@link CommentAttacher.Item}s, preserving up to one blank line between them. */
+    private Doc printAttachedItems(List<CommentAttacher.Item> items) {
+        List<Doc> parts = new ArrayList<>();
+        for (int i = 0; i < items.size(); i++) {
+            CommentAttacher.Item item = items.get(i);
+            if (i > 0) {
+                parts.add(item.blankBefore() ? concat(HARDLINE, HARDLINE) : HARDLINE);
+            }
+            parts.add(printAttachedItem(item));
+        }
+        return concat(parts);
+    }
+
+    private Doc printAttachedItem(CommentAttacher.Item item) {
+        if (item.isComment()) {
+            return text(item.standaloneComment().text());
+        }
+        Doc doc = visit(item.node());
+        if (item.trailingComment() != null) {
+            doc = concat(doc, lineSuffix(text(" " + item.trailingComment().text())));
+        }
+        return doc;
     }
 
     // ---- Helpers -----------------------------------------------------------------------------

@@ -62,21 +62,27 @@ class GroovyFormatterTest {
     }
 
     @Test
-    void formatsPackageAndImportsWithBlankLineSeparation() {
+    void preservesABlankLineBetweenPackageAndImportsWhenSourceHasOne() {
+        String source = "package com.example\n\nimport java.util.List\n\nclass Foo {}\n";
+        assertEquals(source, GroovyFormatter.format(source));
+    }
+
+    @Test
+    void doesNotInventABlankLineBetweenPackageAndImportsWhenSourceHasNone() {
         String source = "package com.example\nimport java.util.List\nclass Foo {}\n";
-        String expected = "package com.example\n\nimport java.util.List\n\nclass Foo {}\n";
+        String expected = "package com.example\nimport java.util.List\nclass Foo {}\n";
         assertEquals(expected, GroovyFormatter.format(source));
     }
 
     @Test
     void formatsStaticAndWildcardImports() {
         String source = "import static java.lang.Math.max\nimport java.util.*\nclass Foo {}\n";
-        String expected = "import static java.lang.Math.max\nimport java.util.*\n\nclass Foo {}\n";
+        String expected = "import static java.lang.Math.max\nimport java.util.*\nclass Foo {}\n";
         assertEquals(expected, GroovyFormatter.format(source));
     }
 
     @Test
-    void formatsFieldsAndAMethodWithReturn() {
+    void formatsFieldsAndAMethodWithReturnWithoutInventingBlankLines() {
         String source =
                 """
                 class Foo {
@@ -91,6 +97,34 @@ class GroovyFormatterTest {
                 """
                 class Foo {
                     int x
+                    String name = "hi"
+                    def bar() {
+                        return x
+                    }
+                }
+                """;
+        assertEquals(expected, GroovyFormatter.format(source));
+    }
+
+    @Test
+    void preservesBlankLinesBetweenClassMembersWhenSourceHasThem() {
+        String source =
+                """
+                class Foo {
+                    int x
+
+                    String name = "hi"
+
+
+                    def bar() {
+                        return x
+                    }
+                }
+                """;
+        String expected =
+                """
+                class Foo {
+                    int x
 
                     String name = "hi"
 
@@ -99,7 +133,72 @@ class GroovyFormatterTest {
                     }
                 }
                 """;
-        assertEquals(expected, GroovyFormatter.format(source));
+        assertEquals(expected, GroovyFormatter.format(source), "consecutive blank lines must cap at one");
+    }
+
+    @Test
+    void preservesALeadingGroovydocCommentBeforeAMethod() {
+        String source =
+                """
+                class Foo {
+                    /**
+                     * Computes the answer.
+                     */
+                    def bar() {
+                        return 1
+                    }
+                }
+                """;
+        assertEquals(source, GroovyFormatter.format(source));
+    }
+
+    @Test
+    void preservesALeadingLineCommentBeforeAField() {
+        String source =
+                """
+                class Foo {
+                    // the base value
+                    int x
+                }
+                """;
+        assertEquals(source, GroovyFormatter.format(source));
+    }
+
+    @Test
+    void preservesATrailingSameLineCommentOnAField() {
+        String source = "class Foo {\n    int x // the base value\n}\n";
+        assertEquals(source, GroovyFormatter.format(source));
+    }
+
+    @Test
+    void preservesBlankLinesAndACommentBetweenBlockStatements() {
+        String source =
+                """
+                class Foo {
+                    def bar() {
+                        int x = 1
+
+                        // compute the result
+                        return x
+                    }
+                }
+                """;
+        assertEquals(source, GroovyFormatter.format(source));
+    }
+
+    @Test
+    void preservesADanglingCommentInAnOtherwiseEmptyClassBody() {
+        String source = "class Foo {\n    // TODO: implement\n}\n";
+        assertEquals(source, GroovyFormatter.format(source));
+    }
+
+    @Test
+    void throwsAClearErrorForACommentInsideAStatementInsteadOfMisplacingIt() {
+        String source = "class Foo {\n    def bar() {\n        int x = foo(/* nested */ 1)\n    }\n}\n";
+        UnsupportedOperationException e =
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        UnsupportedOperationException.class, () -> GroovyFormatter.format(source));
+        org.junit.jupiter.api.Assertions.assertTrue(e.getMessage().contains("nested"));
     }
 
     @Test
