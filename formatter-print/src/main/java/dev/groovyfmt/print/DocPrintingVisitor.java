@@ -58,8 +58,10 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
                     siblings.add(stmt.importDeclaration());
                 } else if (stmt.typeDeclaration() != null) {
                     siblings.add(stmt.typeDeclaration());
+                } else if (stmt.methodDeclaration() != null) {
+                    siblings.add(stmt.methodDeclaration());
                 } else {
-                    throw unsupported(stmt, "top-level script statements (methods/statements outside a class)");
+                    siblings.add(stmt.statement());
                 }
             }
         }
