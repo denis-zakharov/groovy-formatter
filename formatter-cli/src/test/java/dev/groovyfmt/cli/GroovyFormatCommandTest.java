@@ -5,9 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.groovyfmt.print.GroovyFormatter;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -39,6 +42,16 @@ class GroovyFormatCommandTest {
         Files.createDirectories(file.getParent());
         Files.writeString(file, content);
         return file;
+    }
+
+    private Result runWithStdin(String stdin, String... args) {
+        InputStream originalIn = System.in;
+        System.setIn(new ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)));
+        try {
+            return run(args);
+        } finally {
+            System.setIn(originalIn);
+        }
     }
 
     @Test
@@ -185,6 +198,56 @@ class GroovyFormatCommandTest {
         assertEquals(0, result.exitCode());
         assertTrue(result.out().contains("groovy-format"));
         assertTrue(result.out().contains(GroovyFormatCommand.VERSION));
+    }
+
+    @Test
+    void stdinNoFlagsPrintsFormattedOutputToStdout() {
+        Result result = runWithStdin(UNFORMATTED, "-");
+
+        assertEquals(0, result.exitCode());
+        assertEquals(GroovyFormatter.format(UNFORMATTED), result.out());
+    }
+
+    @Test
+    void stdinCheckReportsUnformattedInput() {
+        Result result = runWithStdin(UNFORMATTED, "--check", "-");
+
+        assertEquals(1, result.exitCode());
+        assertTrue(result.out().contains("<stdin>"));
+    }
+
+    @Test
+    void stdinCheckIsSilentOnAlreadyFormattedInput() {
+        Result result = runWithStdin(FORMATTED, "--check", "-");
+
+        assertEquals(0, result.exitCode());
+        assertEquals("", result.out());
+    }
+
+    @Test
+    void stdinReportsParseErrorOnStderr() {
+        Result result = runWithStdin(UNPARSEABLE, "-");
+
+        assertEquals(1, result.exitCode());
+        assertTrue(result.err().contains("<stdin>"));
+    }
+
+    @Test
+    void stdinWithInPlaceIsUsageError() {
+        Result result = runWithStdin(UNFORMATTED, "-i", "-");
+
+        assertEquals(2, result.exitCode());
+        assertTrue(result.err().contains("--in-place"));
+    }
+
+    @Test
+    void stdinCombinedWithOtherFileIsUsageError() throws IOException {
+        Path file = writeFile("Foo.groovy", FORMATTED);
+
+        Result result = runWithStdin(UNFORMATTED, "-", file.toString());
+
+        assertEquals(2, result.exitCode());
+        assertTrue(result.err().contains("stdin"));
     }
 
     @Test

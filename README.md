@@ -59,10 +59,28 @@ needs reformatting), `2` on a usage error (bad flags, or a directory passed with
 `--recursive`). A parse or unsupported-construct error in one file doesn't abort the rest of the
 batch — it's reported on stderr and the remaining files are still processed.
 
-There is no `--stdin` support and no custom include/exclude pattern configuration yet, and no
-standalone distributable binary published — invoking through `./gradlew ... run` (or
-building/running the `formatter-cli` module's own jar directly) is the only supported entry point
-right now.
+Pass `-` alone (instead of any file arguments) to read a single source from stdin and write the
+formatted result to stdout — e.g. `groovy-format -`, or `groovy-format --check -` to check stdin
+without writing anything. `-` can't be combined with `--in-place` (there's nowhere to write back
+to) or with other file arguments.
+
+There is no custom include/exclude pattern configuration yet.
+
+### Editor integration (Helix)
+
+With stdin support and the [fat jar](#distribution) (or a build of `formatter-cli` on your
+`PATH` as `groovy-format`), you can wire this into Helix the same way you'd wire up
+`google-java-format`:
+
+```toml
+[[language]]
+name = "groovy"
+formatter = { command = "groovy-format", args = ["-"] }
+auto-format = true
+```
+
+(Also add a `[[language]]` entry recognizing `.groovy`/`.gradle` files, if Helix doesn't already
+know about Groovy, via `file-types = ["groovy", "gradle"]`.)
 
 ### Example
 
@@ -131,6 +149,21 @@ class Calculator {
 (4-space indentation, consistent spacing, and structure normalized; comments, Groovydoc, and
 blank-line grouping between statements/members are preserved from the original — up to one blank
 line between items, never invented where the source had none.)
+
+## Distribution
+
+Building the project (`./gradlew build`, or just `./gradlew :formatter-cli:fatJar`) produces a
+self-contained jar at `formatter-cli/build/libs/groovy-format-<version>-all.jar`, bundling
+`groovy-format` and all its runtime dependencies (including the Groovy compiler jar it depends on
+for parsing). An end user only needs that one file and a JDK 17+ `java` on their `PATH`:
+
+```bash
+java -jar groovy-format-0.1.0-SNAPSHOT-all.jar path/to/File.groovy
+java -jar groovy-format-0.1.0-SNAPSHOT-all.jar -   # stdin -> stdout
+```
+
+There's no published release yet and no native (JVM-free) binary — see `AGENTS.md`/project issues
+if picking that up.
 
 ## What's supported
 

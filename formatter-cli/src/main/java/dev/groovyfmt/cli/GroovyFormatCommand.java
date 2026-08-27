@@ -4,6 +4,7 @@ import dev.groovyfmt.parser.GroovyParseException;
 import dev.groovyfmt.print.GroovyFormatter;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -34,7 +35,9 @@ public final class GroovyFormatCommand implements Callable<Integer> {
             paramLabel = "FILE",
             arity = "1..*",
             description =
-                    "Groovy source files, or (with --recursive) directories to format.")
+                    "Groovy source files, or (with --recursive) directories to format. Pass '-' "
+                            + "alone to read a single source from stdin and write the formatted "
+                            + "result to stdout.")
     private List<Path> paths;
 
     @ArgGroup(exclusive = true, multiplicity = "0..1")
@@ -66,6 +69,19 @@ public final class GroovyFormatCommand implements Callable<Integer> {
 
     @Override
     public Integer call() {
+        boolean stdin = paths.size() == 1 && isStdinMarker(paths.get(0));
+        if (!stdin && paths.stream().anyMatch(GroovyFormatCommand::isStdinMarker)) {
+            throw new ParameterException(
+                    spec.commandLine(), "'-' (stdin) cannot be combined with other files");
+        }
+        if (stdin) {
+            if (mode.inPlace) {
+                throw new ParameterException(
+                        spec.commandLine(), "--in-place cannot be used with stdin ('-')");
+            }
+            return callStdin();
+        }
+
         List<Path> files;
         try {
             files = GroovyFileFinder.find(paths, recursive);
@@ -103,5 +119,33 @@ public final class GroovyFormatCommand implements Callable<Integer> {
         out.flush();
         err.flush();
         return hadProblem ? 1 : 0;
+    }
+
+    private static boolean isStdinMarker(Path path) {
+        return path.toString().equals("-");
+    }
+
+    private Integer callStdin() {
+        PrintWriter out = spec.commandLine().getOut();
+        PrintWriter err = spec.commandLine().getErr();
+        try {
+            String source = new String(System.in.readAllBytes(), StandardCharsets.UTF_8);
+            String formatted = GroovyFormatter.format(source);
+            int exitCode = 0;
+            if (mode.check) {
+                if (!formatted.equals(source)) {
+                    out.println("<stdin>");
+                    exitCode = 1;
+                }
+            } else {
+                out.print(formatted);
+            }
+            out.flush();
+            return exitCode;
+        } catch (IOException | GroovyParseException | UnsupportedOperationException e) {
+            err.println("groovy-format: <stdin>: " + e.getMessage());
+            err.flush();
+            return 1;
+        }
     }
 }

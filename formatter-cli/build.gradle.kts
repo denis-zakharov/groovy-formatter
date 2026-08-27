@@ -12,3 +12,22 @@ dependencies {
 application {
     mainClass.set("dev.groovyfmt.cli.Main")
 }
+
+// A single self-contained jar bundling groovy-format and all its runtime dependencies, so an
+// end user only needs to grab one file and a JVM: `java -jar groovy-format-all.jar file.groovy`.
+val fatJar =
+    tasks.register<Jar>("fatJar") {
+        group = "distribution"
+        description = "Builds a single executable jar with all runtime dependencies bundled in."
+        archiveBaseName.set("groovy-format")
+        archiveClassifier.set("all")
+        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+        manifest {
+            attributes["Main-Class"] = "dev.groovyfmt.cli.Main"
+        }
+        dependsOn(configurations.runtimeClasspath)
+        from(sourceSets.main.get().output)
+        from(configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) })
+    }
+
+tasks.named("assemble") { dependsOn(fatJar) }
