@@ -239,3 +239,44 @@ Java 17 toolchain (set per-module via the root `build.gradle.kts` `subprojects {
 Groovy version: `4.0.29` (see `formatter-parser/build.gradle.kts`) — bump deliberately, and
 re-verify the "load-bearing facts" above (especially the shading assumption and the `*AltContext`
 audit) against the new jar before trusting it.
+
+## Native image (`formatter-cli/build.gradle.kts`)
+
+`./gradlew :formatter-cli:nativeCompile` (GraalVM Native Build Tools plugin,
+`org.graalvm.buildtools.native`) builds a JVM-free binary. Requires a GraalVM JDK to build with
+(not to run the resulting binary) — `JAVA_HOME`/`GRAALVM_HOME` pointed at one is enough; the
+plugin's own toolchain detection is left off (`toolchainDetection` unset) since it can't tell a
+GraalVM JDK from a plain one, and env-var detection is simpler and was verified to work with a
+[mise](https://mise.jdx.dev/)-managed `graalvm-community` install.
+
+**Load-bearing fact, found only by actually running the built binary, not by reading the build
+log**: the `nativeCompile` build itself succeeds and reports a clean analysis with no fallback
+warnings — but the resulting binary crashed on *every* invocation (including `--help`) with an
+`ExceptionInInitializerError` out of `GroovySystem`/`MetaClassRegistryImpl`, chained from
+`picocli.CommandLine$DefaultFactory.loadClosureClass()`. picocli's `DefaultFactory` unconditionally
+probes for `groovy.lang.Closure` on the classpath (to support Groovy-closure-based command
+factories, a feature this CLI never uses) the first time any `CommandLine` is constructed — and on
+this classpath `groovy.lang.Closure` **is** present (it's `formatter-parser`'s real dependency, for
+the ANTLR4 parser). Merely *loading* that class triggers `Closure`'s static initializer, which
+bootstraps Groovy's entire metaclass/DGM (Default Groovy Methods) runtime — a system this
+formatter has no other reason to touch, since it only walks the parser's CST. That bootstrap reads
+thousands of reflectively-loaded `org.codehaus.groovy.runtime.dgm$N` classes plus a `META-INF/dgminfo`
+resource, none of which `native-image`'s static analysis has any reason to see, so it fails at
+runtime under the closed-world assumption. Registering that reflection config was not attempted —
+it's a huge, fragile surface for a feature that's dead code here. Instead, `Main.main()` sets
+`System.setProperty("picocli.disable.closures", "true")` (a real picocli option since 4.7.0, see
+its javadoc) *before* the first `CommandLine` is constructed, which short-circuits the probe
+entirely — `groovy.lang.Closure` is never loaded, Groovy's metaclass system is never touched, and
+the binary works. **Don't remove that line** thinking it's inert — it's the fix, not a leftover.
+This will resurface as the same crash if `formatter-cli` ever gains a second entry point that
+constructs a `CommandLine` without going through `Main.main()`.
+
+`formatter-cli/build.gradle.kts` also wires up `picocli-codegen` as an annotation processor
+(`-Aproject=...` compiler arg) to generate picocli's own GraalVM reflect-config for the
+`@Command`/`@Option`-annotated classes at compile time — this part worked without needing the
+Groovy digging above; it's what lets picocli read its own annotations under native-image at all.
+
+Smoke-test any change here by actually running the built binary against real `.groovy` files
+(`--help`, `-`, a file arg, `-i`, `-r --check`, and a deliberately-unparseable file to check error
+output) — the build succeeding and the analysis phase reporting no fallback is not evidence the
+binary works, per the incident above.

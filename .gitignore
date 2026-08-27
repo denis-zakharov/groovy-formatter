@@ -1,3 +1,4 @@
+bin/
 .gradle/
 build/
 target/
@@ -9,4 +10,5 @@ out/
 .settings/
 .classpath
 .project
+.factorypath
 *.class

@@ -68,8 +68,10 @@ There is no custom include/exclude pattern configuration yet.
 
 ### Editor integration (Helix)
 
-With stdin support and the [fat jar](#distribution) (or a build of `formatter-cli` on your
-`PATH` as `groovy-format`), you can wire this into Helix the same way you'd wire up
+With stdin support and a `groovy-format` build on your `PATH` — the [native binary](#native-binary)
+gives the snappiest per-keystroke formatting since there's no JVM startup cost, but the
+[fat jar](#distribution) works too (wrap it in a one-line `java -jar ... "$@"` shell script named
+`groovy-format` on your `PATH`) — you can wire this into Helix the same way you'd wire up
 `google-java-format`:
 
 ```toml
@@ -162,8 +164,27 @@ java -jar groovy-format-0.1.0-SNAPSHOT-all.jar path/to/File.groovy
 java -jar groovy-format-0.1.0-SNAPSHOT-all.jar -   # stdin -> stdout
 ```
 
-There's no published release yet and no native (JVM-free) binary — see `AGENTS.md`/project issues
-if picking that up.
+There's no published release yet.
+
+### Native binary
+
+`./gradlew :formatter-cli:nativeCompile` builds a standalone, JVM-free native executable via
+GraalVM `native-image`, at `formatter-cli/build/native/nativeCompile/groovy-format`. This needs a
+GraalVM JDK on `PATH`/`JAVA_HOME` when *building* (not when running the resulting binary) — e.g.
+via [mise](https://mise.jdx.dev/) (`mise use java@graalvm-community-25`) or
+[SDKMAN](https://sdkman.io/) (`sdk install java <version>-graal`). It's not part of the default
+`./gradlew build` (it's a slower, opt-in build), and it only produces a binary for the platform
+you build it on — there's no cross-compilation. See `AGENTS.md` for the picocli/Groovy interaction
+this needed a workaround for.
+
+```bash
+./gradlew :formatter-cli:nativeCompile
+formatter-cli/build/native/nativeCompile/groovy-format path/to/File.groovy
+formatter-cli/build/native/nativeCompile/groovy-format -   # stdin -> stdout
+```
+
+This is what makes the Helix `formatter = { command = "groovy-format", ... }` config above
+snappy — no JVM startup cost per invocation.
 
 ## What's supported
 

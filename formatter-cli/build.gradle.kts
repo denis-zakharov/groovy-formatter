@@ -1,16 +1,35 @@
 // CLI entry point (groovy-format).
 plugins {
     application
+    id("org.graalvm.buildtools.native") version "1.1.10"
 }
 
 dependencies {
     implementation(project(":formatter-print"))
     implementation(project(":formatter-parser"))
     implementation("info.picocli:picocli:4.7.6")
+    // Generates GraalVM reflect-config for the @Command/@Option-annotated classes at compile
+    // time, since picocli reads those annotations via reflection at startup and native-image's
+    // closed-world analysis can't see that on its own.
+    annotationProcessor("info.picocli:picocli-codegen:4.7.6")
+}
+
+tasks.withType<JavaCompile> {
+    options.compilerArgs.add("-Aproject=${project.group}/${project.name}")
 }
 
 application {
     mainClass.set("dev.groovyfmt.cli.Main")
+}
+
+graalvmNative {
+    binaries {
+        named("main") {
+            imageName.set("groovy-format")
+            mainClass.set("dev.groovyfmt.cli.Main")
+            buildArgs.add("--no-fallback")
+        }
+    }
 }
 
 // A single self-contained jar bundling groovy-format and all its runtime dependencies, so an
