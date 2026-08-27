@@ -29,6 +29,7 @@ class GroovyFormatterCorpusFixesTest {
                 "class Foo {\n    def c = { -> 1 }\n}\n",
                 "class Foo {\n    Foo(MetaClassRegistryVeryLongTypeName metaClassRegistry, ClassSomethingLong aClass, MetaClassAnotherLongOne adaptee) {}\n}\n",
                 "class Foo {\n    def bar() {\n        def a = 2 ** 10\n        def m = \"hello\" =~ /h.*o/\n        def n = \"hello\" ==~ /hello/\n        def x = (String) obj\n    }\n}\n",
+                "def x = a?.b\ndef y = a??.b\n",
             })
     void formattingIsIdempotent(String source) {
         String once = GroovyFormatter.format(source);
@@ -111,6 +112,14 @@ class GroovyFormatterCorpusFixesTest {
                     }
                 }
                 """;
+        assertEquals(source, GroovyFormatter.format(source));
+    }
+
+    @Test
+    void formatsSafeNavigationAndSafeChainDotOperators() {
+        // The safe-chain-dot connector was previously mis-printed as "?.." (invalid Groovy syntax)
+        // instead of "??.", silently corrupting valid source.
+        String source = "def x = a?.b\ndef y = a??.b\n";
         assertEquals(source, GroovyFormatter.format(source));
     }
 

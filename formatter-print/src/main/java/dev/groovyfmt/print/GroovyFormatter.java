@@ -13,7 +13,7 @@ import java.util.List;
 /** Public entry point: formats a Groovy source file. */
 public final class GroovyFormatter {
 
-    private static final RenderOptions OPTIONS = new RenderOptions(100, 4);
+    private static final RenderOptions OPTIONS = RenderOptions.defaults();
 
     private GroovyFormatter() {}
 

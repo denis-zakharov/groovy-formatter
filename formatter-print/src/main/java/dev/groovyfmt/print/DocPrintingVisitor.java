@@ -660,18 +660,11 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
 
     @Override
     public Doc visitSwitchStatement(GroovyParser.SwitchStatementContext ctx) {
-        List<? extends GroovyParser.SwitchBlockStatementGroupContext> groupCtxs = ctx.switchBlockStatementGroup();
-        Doc body;
-        if (groupCtxs.isEmpty()) {
-            body = text("{}");
-        } else {
-            List<Doc> groups = new ArrayList<>();
-            for (GroovyParser.SwitchBlockStatementGroupContext g : groupCtxs) {
-                groups.add(printSwitchBlockStatementGroup(g));
-            }
-            body = concat(text("{"), indent(concat(HARDLINE, join(HARDLINE, groups))), HARDLINE, text("}"));
+        List<Doc> groups = new ArrayList<>();
+        for (GroovyParser.SwitchBlockStatementGroupContext g : ctx.switchBlockStatementGroup()) {
+            groups.add(printSwitchBlockStatementGroup(g));
         }
-        return concat(text("switch "), visit(ctx.expressionInPar()), text(" "), body);
+        return concat(text("switch "), visit(ctx.expressionInPar()), text(" "), printSwitchBody(groups));
     }
 
     private Doc printSwitchBlockStatementGroup(GroovyParser.SwitchBlockStatementGroupContext ctx) {
@@ -679,15 +672,7 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         for (GroovyParser.SwitchLabelContext label : ctx.switchLabel()) {
             labels.add(printSwitchLabel(label));
         }
-        Doc labelsDoc = join(HARDLINE, labels);
-        if (ctx.blockStatements() == null) {
-            return labelsDoc;
-        }
-        List<Doc> statements = new ArrayList<>();
-        for (GroovyParser.BlockStatementContext stmt : ctx.blockStatements().blockStatement()) {
-            statements.add(visit(stmt));
-        }
-        return concat(labelsDoc, indent(concat(HARDLINE, join(HARDLINE, statements))));
+        return printSwitchGroupBody(join(HARDLINE, labels), ctx.blockStatements(), false);
     }
 
     private Doc printSwitchLabel(GroovyParser.SwitchLabelContext ctx) {
@@ -704,19 +689,11 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
 
     @Override
     public Doc visitSwitchExpression(GroovyParser.SwitchExpressionContext ctx) {
-        List<? extends GroovyParser.SwitchBlockStatementExpressionGroupContext> groupCtxs =
-                ctx.switchBlockStatementExpressionGroup();
-        Doc body;
-        if (groupCtxs.isEmpty()) {
-            body = text("{}");
-        } else {
-            List<Doc> groups = new ArrayList<>();
-            for (GroovyParser.SwitchBlockStatementExpressionGroupContext g : groupCtxs) {
-                groups.add(printSwitchExpressionGroup(g));
-            }
-            body = concat(text("{"), indent(concat(HARDLINE, join(HARDLINE, groups))), HARDLINE, text("}"));
+        List<Doc> groups = new ArrayList<>();
+        for (GroovyParser.SwitchBlockStatementExpressionGroupContext g : ctx.switchBlockStatementExpressionGroup()) {
+            groups.add(printSwitchExpressionGroup(g));
         }
-        return concat(text("switch "), visit(ctx.expressionInPar()), text(" "), body);
+        return concat(text("switch "), visit(ctx.expressionInPar()), text(" "), printSwitchBody(groups));
     }
 
     private Doc printSwitchExpressionGroup(GroovyParser.SwitchBlockStatementExpressionGroupContext ctx) {
@@ -724,22 +701,32 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         for (GroovyParser.SwitchExpressionLabelContext l : ctx.switchExpressionLabel()) {
             labels.add(printSwitchExpressionLabel(l));
         }
-        Doc labelDoc = join(HARDLINE, labels);
-
-        if (ctx.blockStatements() == null) {
-            return labelDoc;
-        }
-        List<Doc> statements = new ArrayList<>();
-        for (GroovyParser.BlockStatementContext stmt : ctx.blockStatements().blockStatement()) {
-            statements.add(visit(stmt));
-        }
         // A single-statement arrow case (`case 1 -> "one"`) is the conventional style and stays
         // on one line when it fits, same rationale as single-statement closures; anything more
         // must break (no implicit multi-statement-per-line separator).
-        if (statements.size() == 1) {
-            return group(concat(labelDoc, indent(concat(LINE, statements.get(0)))));
+        return printSwitchGroupBody(join(HARDLINE, labels), ctx.blockStatements(), true);
+    }
+
+    private Doc printSwitchBody(List<Doc> groups) {
+        if (groups.isEmpty()) {
+            return text("{}");
         }
-        return concat(labelDoc, indent(concat(HARDLINE, join(HARDLINE, statements))));
+        return concat(text("{"), indent(concat(HARDLINE, join(HARDLINE, groups))), HARDLINE, text("}"));
+    }
+
+    private Doc printSwitchGroupBody(
+            Doc labelsDoc, GroovyParser.BlockStatementsContext blockStatements, boolean allowInlineSingleStatement) {
+        if (blockStatements == null) {
+            return labelsDoc;
+        }
+        List<Doc> statements = new ArrayList<>();
+        for (GroovyParser.BlockStatementContext stmt : blockStatements.blockStatement()) {
+            statements.add(visit(stmt));
+        }
+        if (allowInlineSingleStatement && statements.size() == 1) {
+            return group(concat(labelsDoc, indent(concat(LINE, statements.get(0)))));
+        }
+        return concat(labelsDoc, indent(concat(HARDLINE, join(HARDLINE, statements))));
     }
 
     private Doc printSwitchExpressionLabel(GroovyParser.SwitchExpressionLabelContext ctx) {
@@ -1156,7 +1143,7 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         if (ctx.namePart() != null) {
             String connector;
             if (ctx.SAFE_CHAIN_DOT() != null) {
-                connector = "?..";
+                connector = "??.";
             } else if (ctx.SAFE_DOT() != null) {
                 connector = "?.";
             } else if (ctx.SPREAD_DOT() != null) {
