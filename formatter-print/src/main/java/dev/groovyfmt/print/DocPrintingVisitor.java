@@ -1481,7 +1481,9 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
     }
 
     private static UnsupportedOperationException unsupported(GroovyParser.GroovyParserRuleContext ctx, String what) {
+        var start = ctx.getStart();
+        String location = start == null ? "" : "line " + start.getLine() + ":" + start.getCharPositionInLine() + ": ";
         return new UnsupportedOperationException(
-                "groovy-formatter: " + what + " not supported yet (Phase 2 subset): '" + ctx.getText() + "'");
+                location + what + " not supported yet (Phase 2 subset): '" + ctx.getText() + "'");
     }
 }

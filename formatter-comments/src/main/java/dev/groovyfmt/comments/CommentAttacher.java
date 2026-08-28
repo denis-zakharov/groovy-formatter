@@ -122,7 +122,7 @@ public final class CommentAttacher {
         for (Comment c : comments) {
             if (!claimedTokenIndices.contains(c.tokenIndex())) {
                 throw new UnsupportedOperationException(
-                        "groovy-formatter: a comment inside a single statement/expression is not supported "
+                        "line " + c.line() + ": a comment inside a single statement/expression is not supported "
                                 + "yet (Phase 3 only preserves comments between statements/members): '"
                                 + c.text() + "'");
             }

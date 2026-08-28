@@ -57,7 +57,7 @@ public final class GroovyCstParser {
     // token-type symbols) and the parser (generic over Token symbols) by implementing
     // ANTLRErrorListener<Object>, a supertype of both.
     private static final class ThrowingErrorListener implements ANTLRErrorListener<Object> {
-        private final List<String> errors = new ArrayList<>();
+        private final List<GroovyParseException.SyntaxError> errors = new ArrayList<>();
 
         @Override
         public <T> void syntaxError(
@@ -67,15 +67,22 @@ public final class GroovyCstParser {
                 int charPositionInLine,
                 String msg,
                 RecognitionException e) {
-            errors.add("line " + line + ":" + charPositionInLine + " " + msg);
+            errors.add(new GroovyParseException.SyntaxError(line, charPositionInLine, msg));
         }
 
         void throwIfAny() {
-            if (!errors.isEmpty()) {
-                throw new GroovyParseException(
-                        "groovy-formatter: input is not valid Groovy source (" + errors.size() + " syntax error(s)):\n"
-                                + String.join("\n", errors));
+            if (errors.isEmpty()) {
+                return;
             }
+            StringBuilder message =
+                    new StringBuilder("input is not valid Groovy source (")
+                            .append(errors.size())
+                            .append(" syntax error(s)):");
+            for (GroovyParseException.SyntaxError error : errors) {
+                message.append("\nline ").append(error.line()).append(':').append(error.column())
+                        .append(' ').append(error.message());
+            }
+            throw new GroovyParseException(message.toString(), errors);
         }
     }
 }

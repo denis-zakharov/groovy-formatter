@@ -5,8 +5,10 @@ import dev.groovyfmt.print.GroovyFormatter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.concurrent.Callable;
 import picocli.CommandLine.ArgGroup;
@@ -106,12 +108,19 @@ public final class GroovyFormatCommand implements Callable<Integer> {
                     }
                 } else if (mode.inPlace) {
                     if (!formatted.equals(source)) {
-                        Files.writeString(file, formatted);
+                        writeInPlace(file, formatted);
                     }
                 } else {
                     out.print(formatted);
                 }
-            } catch (IOException | GroovyParseException | UnsupportedOperationException e) {
+            } catch (GroovyParseException e) {
+                for (GroovyParseException.SyntaxError syntaxError : e.errors()) {
+                    err.println(
+                            file + ":" + syntaxError.line() + ":" + syntaxError.column()
+                                    + ": error: " + syntaxError.message());
+                }
+                hadProblem = true;
+            } catch (IOException | UnsupportedOperationException e) {
                 err.println("groovy-format: " + file + ": " + e.getMessage());
                 hadProblem = true;
             }
@@ -142,10 +151,42 @@ public final class GroovyFormatCommand implements Callable<Integer> {
             }
             out.flush();
             return exitCode;
-        } catch (IOException | GroovyParseException | UnsupportedOperationException e) {
+        } catch (GroovyParseException e) {
+            for (GroovyParseException.SyntaxError syntaxError : e.errors()) {
+                err.println("<stdin>:" + syntaxError.line() + ":" + syntaxError.column() + ": error: " + syntaxError.message());
+            }
+            err.flush();
+            return 1;
+        } catch (IOException | UnsupportedOperationException e) {
             err.println("groovy-format: <stdin>: " + e.getMessage());
             err.flush();
             return 1;
+        }
+    }
+
+    /**
+     * Writes {@code formatted} to {@code file} all-or-nothing: the new content is written to a
+     * sibling temp file first and only swapped into place with an atomic rename once it's fully
+     * on disk, so a write failure (or a crash) partway through can never leave {@code file} with
+     * a mix of old and new content.
+     */
+    private static void writeInPlace(Path file, String formatted) throws IOException {
+        Path dir = file.toAbsolutePath().getParent();
+        Path tmp = Files.createTempFile(dir, file.getFileName().toString(), ".tmp");
+        try {
+            Files.writeString(tmp, formatted, StandardCharsets.UTF_8);
+            try {
+                Files.setPosixFilePermissions(tmp, Files.getPosixFilePermissions(file));
+            } catch (UnsupportedOperationException ignored) {
+                // Non-POSIX filesystem (e.g. Windows) — nothing to preserve.
+            }
+            try {
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(tmp);
         }
     }
 }
