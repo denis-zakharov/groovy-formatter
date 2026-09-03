@@ -172,7 +172,49 @@ used throughout, and should be used again for any new grammar area:
 
 ## Style decisions (opinionated, not grammar-mandated — document if changed)
 
-- 4-space indent, 100-column width (`GroovyFormatter.OPTIONS`).
+- 4-space indent, 100-column width by default — configurable via `RenderOptions` (`maxWidth`,
+  `indentWidth`, `indentStyle`: `SPACES`/`TABS`), and via the CLI's `--line-length`/`-w`,
+  `--indent-size`/`-x`, `--use-tabs` flags. `GroovyFormatter.format(String)` still exists using
+  `RenderOptions.defaults()`; pass a second `RenderOptions` argument to override. Note: for
+  `TABS`, `indentWidth` is used only to compute line-fitting width (one tab ≈ `indentWidth`
+  columns, since actual tab-stop width is a viewer setting) — the emitted indentation is one tab
+  character per level, not `indentWidth` tabs.
+- Triple-quoted strings/GStrings (`'''...'''`, `"""..."""`) that span multiple source lines are
+  printed verbatim (see below) except for their own indentation: continuation lines are reindented
+  by whatever delta the statement/expression containing them moved by, so relative indentation
+  survives the string being reformatted into a different nesting depth. Implemented as
+  `Doc.IndentedVerbatim(raw, baseIndent)` in `formatter-doc`, rendered by `DocRenderer`:
+  `baseIndent` is the leading-whitespace run of the source line the literal started on; each
+  continuation line has that prefix stripped (only as much of it as is actually present — no
+  assumption every line is indented at least that far) and the literal's *new* render-time indent
+  level prepended. `DocPrintingVisitor` opts a verbatim span into this only when it starts with
+  `'''`/`"""` and contains a real `\n` — a same-line (non-multiline) string/GString is unaffected.
+  This only shifts indentation; the string's actual content (SQL, a config template, whatever) is
+  never parsed or reformatted, consistent with "GString contents are never reformatted" below —
+  **except** for the one case below.
+- **The sole triple-quoted-string argument of a bare `sh(...)`/`sh '''...'''` call (the Jenkins
+  pipeline shell step) actually gets its body run through `formatter-shell`'s `ShellFormatter`**,
+  not just reindented — this is the one place a string's *content* is reformatted, not merely
+  repositioned. Detected structurally in `DocPrintingVisitor` (`isShellStepCalleeText`, checked at
+  both the paren-less command-expression call site and the parenthesized path-expression call
+  site — a call like `foo.sh(...)` on some other receiver does NOT match, only a bare `sh`
+  identifier callee with exactly one argument) via a scoped `argumentIsShellScript` boolean field
+  set around visiting that single argument (see `printExpressionListElement`'s two-arg overload).
+  `printVerbatimSourceSpan`/`tryPrintAsShellScript` then: strips the outer quotes, runs the body
+  through `ShellFormatter.format(body, renderOptions)` (same `RenderOptions` — indent size/style,
+  max width — as the outer Groovy format, so nested shell follows the same conventions), and
+  rebuilds an `IndentedVerbatim` from the *formatted* shell text (one indent level deeper than the
+  statement, closing quote back at the statement's own level) so it still tracks reindentation the
+  normal way. **Falls back to the plain verbatim reindent** (returns `null`, caught by the caller)
+  whenever the body doesn't start with its own newline, or `ShellFormatter.format` throws — a
+  `RuntimeException` from unsupported syntax (e.g. `arr=(a b c)`, see below) or genuinely invalid
+  shell (including a body that isn't shell at all, or Groovy interpolation the shell lexer can't
+  make sense of) — so a `sh` step containing something the shell formatter can't yet handle never
+  fails the whole Jenkinsfile format, it just keeps its previous (reindent-only) behavior for that
+  one block. GString interpolation (`${name}`) inside the body round-trips unchanged because the
+  shell lexer already treats `${...}` as an opaque, verbatim-printed parameter-expansion token
+  (`scanBalancedBrace` in `formatter-shell`'s `Lexer` — see its own section below) regardless of
+  what's actually inside the braces.
 - A single-statement closure body or `case`/`default` body stays on one line when it fits
   (`list.each { it * 2 }`, `case 1 -> "one"`); two or more statements always break. Groovy has no
   implicit multi-statement-per-line separator, so this isn't optional once there's more than one
@@ -280,3 +322,97 @@ Smoke-test any change here by actually running the built binary against real `.g
 (`--help`, `-`, a file arg, `-i`, `-r --check`, and a deliberately-unparseable file to check error
 output) — the build succeeding and the analysis phase reporting no fallback is not evidence the
 binary works, per the incident above.
+
+## `formatter-shell` / `shell-format-cli` (the shell formatter)
+
+A second, independent formatter in this repo: reformats shell (sh/bash) source, standalone (via
+`shell-format-cli`) or as the engine behind a Jenkinsfile `sh '''...'''`/`sh(...)` step's script
+body — see the `DocPrintingVisitor`/`tryPrintAsShellScript` bullet above for how `formatter-print`
+wires this in (`formatter-print/build.gradle.kts` depends on `formatter-shell`) and how it falls
+back to plain verbatim reindenting for anything the shell formatter rejects. Public API:
+`dev.groovyfmt.shell.ShellFormatter.format(String)` / `format(String, RenderOptions)`.
+
+**Unlike the Groovy formatter, there is no off-the-shelf grammar to reuse.** Groovy's own ANTLR4
+grammar being embedded in its compiler jar is what let `formatter-parser` avoid writing a Groovy
+grammar from scratch; no equivalent exists for shell as a Java dependency, so `formatter-shell`
+hand-writes a lexer (`lexer/Lexer.java`) and a recursive-descent parser (`parser/Parser.java`)
+implementing a practical POSIX-sh-plus-common-bash subset, feeding an AST (`ast/*.java`) that
+`print/ShellPrinter.java` walks to build a `Doc` tree — reusing `formatter-doc` unchanged, since
+it has zero Groovy-specific (or shell-specific) knowledge.
+
+### Design choices specific to shell
+
+- **Words are split only at quote/expansion boundaries, never re-interpreted.** A `Literal`
+  `WordPart` holds the exact source substring (backslash escapes included) for an unquoted run;
+  quoted bodies and expansion inner text (`${...}`, `` $(...) ``, `` `...` ``, `$((...))`) are
+  likewise stored raw and printed back verbatim. This is the same philosophy `formatter-print`
+  uses for GString bodies — a structural formatter, not a content normalizer — and it's what
+  keeps the lexer's escaping logic simple and correct by construction rather than needing to
+  round-trip through an interpreted-then-re-escaped representation.
+- **`$(...)` command substitutions ARE recursively reformatted** (parsed and printed through the
+  same `Parser`/`ShellPrinter`, falling back to printing the raw text verbatim if the nested parse
+  fails) — this is the one place content actually gets reformatted, since it's genuinely nested
+  shell syntax, not opaque data. Backtick `` `...` `` substitutions are **not** reformatted
+  (always printed verbatim) — their escaping rules differ from `$(...)` and re-lexing them wasn't
+  worth the added complexity for a legacy form `$(...)` has mostly replaced.
+- **Every statement list (function/block/loop bodies, and top-level scripts) prints one statement
+  per line, always.** This sidesteps needing a flat/broken dual-mode block renderer; the one place
+  that still benefits from staying on one line when short — a `$(...)` with exactly one statement,
+  e.g. `$(basename "$f")` — falls out for free, since `ShellPrinter` only inserts a hardline
+  *between* entries, never around a lone one.
+- **Here-doc bodies are never reindented or otherwise altered, even for `<<-`.** The lexer reads a
+  pending here-doc's body as soon as it crosses the newline ending the redirect's opening line
+  (`Lexer.readHereDocBodies`, mirroring how real shells read here-docs), via a mutable
+  `ast.HereDocBody` holder the parser creates before the body text exists and the lexer fills in
+  later — but the stored `text` is always the exact original lines. `<<-`'s leading-tab stripping
+  is applied only to the *comparison* used to recognize the terminator line, never to the stored
+  body, so a heredoc's content can never be silently altered by this formatter.
+- **Blank-line detection between statements counts NEWLINE *tokens*, not source line-number
+  deltas** (`Parser.consumeBoundary`). A here-doc's opening redirect is followed by exactly one
+  NEWLINE token even though the lexer silently swallows several physical source lines (the body
+  plus the delimiter line) while producing it; comparing raw line numbers there previously
+  produced a false blank-line after every here-doc (a real bug, found by the idempotency test —
+  same lesson as the Groovy side: **run it, don't just reason about it**). One NEWLINE token is
+  always "free" (it ends the previous statement's own line, or the block-opening keyword's line
+  on a list's first call); each comment consumes one more (it sits on its own line); anything
+  beyond that is a real blank line.
+- **Comments and blank lines are preserved, capped at one blank line, same as the Groovy side** —
+  see `ast.StatementList`/`Comment` and `Parser.consumeBoundary`/`parseStatementList`. There's no
+  ANTLR hidden-channel to lean on here (there's no ANTLR at all); comments are recorded by the
+  lexer with their line number as it scans past them and matched up against statement boundaries
+  by the parser afterward.
+
+### What's out of scope (throws `UnsupportedOperationException` or a parse error, never silently mis-formatted)
+
+Array assignments (`arr=(a b c)`), C-style `for ((;;))`, arithmetic commands `((...))` as a
+standalone command, `[[ ... ]]` extended-test internals (parsed as an ordinary simple command —
+works for the common case, but `&&`/`||`/`<`/`>` *inside* `[[ ]]` will be misparsed as pipeline/
+redirection operators since there's no special lexer mode for it), process substitution
+(`<(...)`/`>(...)`), brace expansion, and any parameter-expansion operator inside `${...}` (stored
+and printed verbatim, never parsed). Long `&&`/`||` chains and long pipelines are never
+line-wrapped (printed on one line regardless of length) — no width-based flex logic was built for
+them, unlike the Groovy side's argument-list wrapping.
+
+### Testing
+
+`formatter-shell`'s `ShellFormatterTest` covers each construct plus a `formattingIsIdempotent`
+parameterized test, the same pattern as the Groovy side. As with the Groovy formatter, treat
+idempotency failures as the highest-signal check when something looks subtly wrong — it's what
+caught the here-doc blank-line bug above.
+
+### Build / run
+
+```bash
+./gradlew :shell-format-cli:run --args="path/to/script.sh"        # format one file, prints to stdout
+./gradlew :shell-format-cli:run --args="-i path/to/script.sh"     # format in place
+./gradlew :shell-format-cli:nativeCompile                          # JVM-free binary (GraalVM required to build)
+```
+
+`shell-format-cli/build.gradle.kts` mirrors `formatter-cli/build.gradle.kts` (same picocli setup,
+same fat-jar task, same GraalVM Native Build Tools config) but has **no dependency on Groovy at
+all** — so the `groovy.lang.Closure`/picocli-probe crash documented above for `formatter-cli`
+doesn't apply here; `shell-format-cli`'s `Main.java` deliberately does *not* set
+`picocli.disable.closures`, since there's nothing on its classpath for that probe to trip over.
+Verified: `nativeCompile` produces a working binary (`--help`, a file arg, stdin, and a
+deliberately-unparseable input all checked directly against the built executable, not just a
+clean analysis log — same discipline as the Groovy CLI's native image, per the incident above).

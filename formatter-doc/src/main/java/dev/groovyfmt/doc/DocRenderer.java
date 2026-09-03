@@ -39,7 +39,7 @@ public final class DocRenderer {
             } else if (d instanceof Doc.Concat c) {
                 pushChildrenReversed(stack, cmd.indent(), cmd.mode(), c.parts());
             } else if (d instanceof Doc.Indent ind) {
-                stack.push(new Cmd(cmd.indent() + options.indentWidth(), cmd.mode(), ind.child()));
+                stack.push(new Cmd(cmd.indent() + 1, cmd.mode(), ind.child()));
             } else if (d instanceof Doc.Group g) {
                 boolean forced = containsForcedBreak(g.child(), breakCache);
                 Mode mode;
@@ -63,24 +63,26 @@ public final class DocRenderer {
                     if (flushLineSuffixesIfNeeded(stack, lineSuffixes, cmd)) {
                         continue;
                     }
-                    pos = newline(out, cmd.indent());
+                    pos = newline(out, cmd.indent(), options);
                 }
             } else if (d instanceof Doc.SoftLine) {
                 if (cmd.mode() == Mode.BREAK) {
                     if (flushLineSuffixesIfNeeded(stack, lineSuffixes, cmd)) {
                         continue;
                     }
-                    pos = newline(out, cmd.indent());
+                    pos = newline(out, cmd.indent(), options);
                 }
             } else if (d instanceof Doc.HardLine) {
                 if (flushLineSuffixesIfNeeded(stack, lineSuffixes, cmd)) {
                     continue;
                 }
-                pos = newline(out, cmd.indent());
+                pos = newline(out, cmd.indent(), options);
             } else if (d instanceof Doc.LineSuffix ls) {
                 lineSuffixes.add(new Cmd(cmd.indent(), cmd.mode(), ls.child()));
             } else if (d instanceof Doc.BreakParent) {
                 // No text of its own; only affects containsForcedBreak/fits calculations.
+            } else if (d instanceof Doc.IndentedVerbatim iv) {
+                pos = renderIndentedVerbatim(out, iv, cmd.indent(), options);
             }
 
             if (stack.isEmpty() && !lineSuffixes.isEmpty()) {
@@ -109,10 +111,40 @@ public final class DocRenderer {
         return true;
     }
 
-    private static int newline(StringBuilder out, int indent) {
+    private static int newline(StringBuilder out, int level, RenderOptions options) {
         out.append('\n');
-        out.append(" ".repeat(Math.max(0, indent)));
-        return indent;
+        out.append(indentText(level, options));
+        return level * options.indentWidth();
+    }
+
+    private static String indentText(int level, RenderOptions options) {
+        return options.indentUnit().repeat(Math.max(0, level));
+    }
+
+    /**
+     * Emits {@code iv.raw()} with every line after the first re-indented from its original
+     * ({@code iv.baseIndent()}) depth to {@code level}, preserving indentation relative to that
+     * base. Returns the resulting column position (in {@code indentWidth}-equivalent columns).
+     */
+    private static int renderIndentedVerbatim(StringBuilder out, Doc.IndentedVerbatim iv, int level, RenderOptions options) {
+        String[] lines = iv.raw().split("\n", -1);
+        out.append(lines[0]);
+        String newIndent = indentText(level, options);
+        for (int i = 1; i < lines.length; i++) {
+            out.append('\n').append(newIndent).append(dedent(lines[i], iv.baseIndent()));
+        }
+        String lastLine = dedent(lines[lines.length - 1], iv.baseIndent());
+        return lines.length == 1 ? level * options.indentWidth() + lines[0].length()
+                : level * options.indentWidth() + lastLine.length();
+    }
+
+    /** Strips a leading prefix of {@code line} matching as much of {@code baseIndent} as present. */
+    private static String dedent(String line, String baseIndent) {
+        int i = 0;
+        while (i < line.length() && i < baseIndent.length() && line.charAt(i) == baseIndent.charAt(i)) {
+            i++;
+        }
+        return line.substring(i);
     }
 
     private static void pushChildrenReversed(Deque<Cmd> stack, int indent, Mode mode, List<Doc> parts) {
@@ -171,6 +203,12 @@ public final class DocRenderer {
                 // Deferred content never counts toward the current line's width.
             } else if (d instanceof Doc.BreakParent) {
                 // No width contribution.
+            } else if (d instanceof Doc.IndentedVerbatim iv) {
+                // Like HardLine: only the portion before its first embedded newline counts
+                // against the current line, and the line necessarily ends there.
+                int nl = iv.raw().indexOf('\n');
+                remaining -= (nl == -1 ? iv.raw().length() : nl);
+                return remaining >= 0;
             }
         }
         return false;
@@ -185,6 +223,8 @@ public final class DocRenderer {
         boolean result;
         if (doc instanceof Doc.HardLine || doc instanceof Doc.BreakParent) {
             result = true;
+        } else if (doc instanceof Doc.IndentedVerbatim iv) {
+            result = iv.raw().indexOf('\n') != -1;
         } else if (doc instanceof Doc.Concat c) {
             result = c.parts().stream().anyMatch(p -> containsForcedBreak(p, cache));
         } else if (doc instanceof Doc.Group g) {

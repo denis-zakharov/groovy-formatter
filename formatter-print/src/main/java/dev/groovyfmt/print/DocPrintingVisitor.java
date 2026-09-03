@@ -8,12 +8,15 @@ import static dev.groovyfmt.doc.Docs.concat;
 import static dev.groovyfmt.doc.Docs.group;
 import static dev.groovyfmt.doc.Docs.ifBreak;
 import static dev.groovyfmt.doc.Docs.indent;
+import static dev.groovyfmt.doc.Docs.indentedVerbatim;
 import static dev.groovyfmt.doc.Docs.join;
 import static dev.groovyfmt.doc.Docs.lineSuffix;
 import static dev.groovyfmt.doc.Docs.text;
 
 import dev.groovyfmt.comments.CommentAttacher;
 import dev.groovyfmt.doc.Doc;
+import dev.groovyfmt.doc.RenderOptions;
+import dev.groovyfmt.shell.ShellFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.groovy.parser.antlr4.GroovyParser;
@@ -38,10 +41,22 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
 
     private final CommentAttacher commentAttacher;
     private final String source;
+    private final RenderOptions renderOptions;
+
+    // Set (scoped via try/finally around visiting a single call argument) while printing the sole
+    // argument of a bare "sh(...)" / "sh '''...'''" Jenkins pipeline step call, so that
+    // printVerbatimSourceSpan knows to run the triple-quoted string's body through the shell
+    // formatter instead of just reindenting it verbatim. See printExpressionListElement.
+    private boolean argumentIsShellScript;
 
     DocPrintingVisitor(CommentAttacher commentAttacher, String source) {
+        this(commentAttacher, source, RenderOptions.defaults());
+    }
+
+    DocPrintingVisitor(CommentAttacher commentAttacher, String source, RenderOptions renderOptions) {
         this.commentAttacher = commentAttacher;
         this.source = source;
+        this.renderOptions = renderOptions;
     }
 
     // ---- Compilation unit --------------------------------------------------------------------
@@ -972,11 +987,19 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         if (ctx.enhancedArgumentListInPar() == null) {
             return base;
         }
+        List<? extends GroovyParser.EnhancedArgumentListElementContext> elements =
+                ctx.enhancedArgumentListInPar().enhancedArgumentListElement();
+        boolean shellCall = isShellStepCalleeText(ctx.expression().getText()) && elements.size() == 1;
         List<Doc> args = new ArrayList<>();
-        for (GroovyParser.EnhancedArgumentListElementContext e : ctx.enhancedArgumentListInPar().enhancedArgumentListElement()) {
-            args.add(printArgumentElement(e));
+        for (GroovyParser.EnhancedArgumentListElementContext e : elements) {
+            args.add(printArgumentElement(e, shellCall));
         }
         return concat(base, text(" "), join(text(", "), args));
+    }
+
+    /** Whether {@code calleeText} is a bare {@code sh} call — the Jenkins pipeline shell step. */
+    private static boolean isShellStepCalleeText(String calleeText) {
+        return "sh".equals(calleeText);
     }
 
     @Override
@@ -1130,15 +1153,21 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         }
         List<Doc> parts = new ArrayList<>();
         parts.add(visit(ctx.primary()));
+        // A bare `sh(...)` call — primary "sh" followed by exactly one pathElement that's the
+        // call's parenthesized arguments — is the parenthesized form of the Jenkins shell step;
+        // see printExpressionListElement for the paren-less `sh '''...'''` form.
+        boolean shellCall = isShellStepCalleeText(ctx.primary().getText())
+                && ctx.pathElement().size() == 1
+                && ctx.pathElement(0).arguments() != null;
         for (GroovyParser.PathElementContext element : ctx.pathElement()) {
-            parts.add(printPathElement(element));
+            parts.add(printPathElement(element, shellCall));
         }
         return concat(parts);
     }
 
-    private Doc printPathElement(GroovyParser.PathElementContext ctx) {
+    private Doc printPathElement(GroovyParser.PathElementContext ctx, boolean shellCall) {
         if (ctx.arguments() != null) {
-            return printArguments(ctx.arguments());
+            return printArguments(ctx.arguments(), shellCall);
         }
         if (ctx.namePart() != null) {
             String connector;
@@ -1185,8 +1214,18 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
     }
 
     private Doc printExpressionListElement(GroovyParser.ExpressionListElementContext ctx) {
-        Doc doc = visit(ctx.expression());
-        return ctx.MUL() != null ? concat(text("*"), doc) : doc;
+        return printExpressionListElement(ctx, false);
+    }
+
+    private Doc printExpressionListElement(GroovyParser.ExpressionListElementContext ctx, boolean shellCandidate) {
+        boolean previous = argumentIsShellScript;
+        argumentIsShellScript = shellCandidate;
+        try {
+            Doc doc = visit(ctx.expression());
+            return ctx.MUL() != null ? concat(text("*"), doc) : doc;
+        } finally {
+            argumentIsShellScript = previous;
+        }
     }
 
     private String printNamePart(GroovyParser.NamePartContext ctx) {
@@ -1203,12 +1242,19 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
     }
 
     private Doc printArguments(GroovyParser.ArgumentsContext ctx) {
+        return printArguments(ctx, false);
+    }
+
+    private Doc printArguments(GroovyParser.ArgumentsContext ctx, boolean shellCall) {
         if (ctx.enhancedArgumentListInPar() == null) {
             return text("()");
         }
+        List<? extends GroovyParser.EnhancedArgumentListElementContext> elements =
+                ctx.enhancedArgumentListInPar().enhancedArgumentListElement();
+        boolean shellArg = shellCall && elements.size() == 1;
         List<Doc> args = new ArrayList<>();
-        for (GroovyParser.EnhancedArgumentListElementContext e : ctx.enhancedArgumentListInPar().enhancedArgumentListElement()) {
-            args.add(printArgumentElement(e));
+        for (GroovyParser.EnhancedArgumentListElementContext e : elements) {
+            args.add(printArgumentElement(e, shellArg));
         }
         return group(
                 concat(
@@ -1219,9 +1265,9 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
                         text(")")));
     }
 
-    private Doc printArgumentElement(GroovyParser.EnhancedArgumentListElementContext ctx) {
+    private Doc printArgumentElement(GroovyParser.EnhancedArgumentListElementContext ctx, boolean shellCandidate) {
         if (ctx.expressionListElement() != null) {
-            return printExpressionListElement(ctx.expressionListElement());
+            return printExpressionListElement(ctx.expressionListElement(), shellCandidate);
         }
         if (ctx.mapEntry() != null) {
             return printMapEntry(ctx.mapEntry());
@@ -1414,7 +1460,71 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
     private Doc printVerbatimSourceSpan(GroovyParser.GroovyParserRuleContext ctx) {
         int startChar = ctx.getStart().getStartIndex();
         int stopChar = ctx.getStop().getStopIndex();
-        return text(source.substring(startChar, stopChar + 1));
+        String raw = source.substring(startChar, stopChar + 1);
+        // A triple-quoted string/GString can span multiple source lines, with its continuation
+        // lines indented relative to wherever it originally sat. Reformatting can move the
+        // statement it's part of to a different nesting depth, so those continuation lines need
+        // to be shifted by the same amount the statement was — see Doc.IndentedVerbatim.
+        if (isTripleQuoted(raw) && raw.indexOf('\n') != -1) {
+            String baseIndent = sourceLineIndentAt(startChar);
+            if (argumentIsShellScript) {
+                Doc shellDoc = tryPrintAsShellScript(raw, baseIndent);
+                if (shellDoc != null) {
+                    return shellDoc;
+                }
+            }
+            return indentedVerbatim(raw, baseIndent);
+        }
+        return text(raw);
+    }
+
+    private static boolean isTripleQuoted(String raw) {
+        return raw.startsWith("'''") || raw.startsWith("\"\"\"");
+    }
+
+    /**
+     * Reformats a triple-quoted {@code sh} step body through {@link ShellFormatter} and rebuilds it
+     * as an {@code IndentedVerbatim}, so it both gets real shell formatting AND still tracks the
+     * surrounding statement's nesting depth like any other multiline string. Returns {@code null}
+     * (falling back to the plain verbatim reindent) for anything the shell formatter can't handle —
+     * a body that doesn't start on its own line, invalid/unsupported shell syntax, or Groovy
+     * interpolation the shell parser chokes on — since a `sh` step's argument isn't guaranteed to
+     * be valid shell (e.g. templated snippets), and a Jenkinsfile shouldn't fail to format over it.
+     */
+    private Doc tryPrintAsShellScript(String raw, String baseIndent) {
+        String quote = raw.substring(0, 3);
+        String body = raw.substring(3, raw.length() - 3);
+        if (!body.startsWith("\n")) {
+            return null;
+        }
+        String formatted;
+        try {
+            formatted = ShellFormatter.format(body, renderOptions);
+        } catch (RuntimeException e) {
+            return null;
+        }
+        String bodyIndent = baseIndent + renderOptions.indentUnit();
+        String[] lines = formatted.split("\n", -1);
+        int lineCount = formatted.endsWith("\n") ? lines.length - 1 : lines.length;
+        StringBuilder rebuilt = new StringBuilder(quote);
+        for (int i = 0; i < lineCount; i++) {
+            rebuilt.append('\n');
+            if (!lines[i].isEmpty()) {
+                rebuilt.append(bodyIndent).append(lines[i]);
+            }
+        }
+        rebuilt.append('\n').append(baseIndent).append(quote);
+        return indentedVerbatim(rebuilt.toString(), baseIndent);
+    }
+
+    /** The leading whitespace run of the source line containing character offset {@code charIndex}. */
+    private String sourceLineIndentAt(int charIndex) {
+        int lineStart = source.lastIndexOf('\n', charIndex - 1) + 1;
+        int i = lineStart;
+        while (i < source.length() && (source.charAt(i) == ' ' || source.charAt(i) == '\t')) {
+            i++;
+        }
+        return source.substring(lineStart, i);
     }
 
     @Override
@@ -1429,7 +1539,7 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
 
     @Override
     public Doc visitStringLiteralAlt(GroovyParser.StringLiteralAltContext ctx) {
-        return text(ctx.stringLiteral().getText());
+        return printVerbatimSourceSpan(ctx.stringLiteral());
     }
 
     @Override

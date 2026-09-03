@@ -6,6 +6,7 @@ import static dev.groovyfmt.doc.Docs.concat;
 import static dev.groovyfmt.doc.Docs.group;
 import static dev.groovyfmt.doc.Docs.ifBreak;
 import static dev.groovyfmt.doc.Docs.indent;
+import static dev.groovyfmt.doc.Docs.indentedVerbatim;
 import static dev.groovyfmt.doc.Docs.join;
 import static dev.groovyfmt.doc.Docs.lineSuffix;
 import static dev.groovyfmt.doc.Docs.text;
@@ -122,5 +123,45 @@ class DocRendererTest {
                                 text(")")));
         Doc doc = concat(first, text(" "), second);
         assertEquals("( a ) (\n  aVeryLongArgumentThatWontFit\n)", render(doc, 15));
+    }
+
+    @Test
+    void indentUsesTabsWhenConfigured() {
+        Doc doc = concat(text("a"), indent(concat(HARDLINE, text("b"))));
+        RenderOptions options = new RenderOptions(80, 4, RenderOptions.IndentStyle.TABS);
+        assertEquals("a\n\tb", DocRenderer.render(doc, options));
+    }
+
+    @Test
+    void indentUsesConfiguredColumnCount() {
+        Doc doc = concat(text("a"), indent(concat(HARDLINE, text("b"))));
+        assertEquals("a\n      b", DocRenderer.render(doc, new RenderOptions(80, 6)));
+    }
+
+    @Test
+    void indentedVerbatimShiftsContinuationLinesToTheNewIndentLevel() {
+        Doc doc =
+                concat(
+                        text("sh "),
+                        indentedVerbatim("'''\n    echo hi\n    ls\n'''", ""));
+        // Rendered one indent level deep: continuation lines gain 2 columns since their
+        // original baseIndent ("") had none to strip.
+        Doc wrapped = indent(concat(HARDLINE, doc));
+        assertEquals("\n  sh '''\n      echo hi\n      ls\n  '''", render(wrapped, 80));
+    }
+
+    @Test
+    void indentedVerbatimStripsOnlyTheOriginalBaseIndentBeforeReindenting() {
+        // baseIndent is "    " (4 spaces): each continuation line has that much stripped, then
+        // the new indent level (2 spaces, one level) is prepended - net effect is a -2 shift.
+        Doc doc = indentedVerbatim("'''\n      echo hi\n    '''", "    ");
+        Doc wrapped = indent(concat(HARDLINE, doc));
+        assertEquals("\n  '''\n    echo hi\n  '''", render(wrapped, 80));
+    }
+
+    @Test
+    void indentedVerbatimForcesItsEnclosingGroupToBreak() {
+        Doc doc = group(concat(text("sh("), indentedVerbatim("'''\na\n'''", ""), text(")")));
+        assertEquals("sh('''\na\n''')", render(doc, 80));
     }
 }

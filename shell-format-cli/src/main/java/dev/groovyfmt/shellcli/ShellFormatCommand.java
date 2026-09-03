@@ -1,8 +1,8 @@
-package dev.groovyfmt.cli;
+package dev.groovyfmt.shellcli;
 
 import dev.groovyfmt.doc.RenderOptions;
-import dev.groovyfmt.parser.GroovyParseException;
-import dev.groovyfmt.print.GroovyFormatter;
+import dev.groovyfmt.shell.ShellFormatter;
+import dev.groovyfmt.shell.ShellParseException;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
@@ -21,15 +21,15 @@ import picocli.CommandLine.ParameterException;
 import picocli.CommandLine.Spec;
 
 /**
- * The {@code groovy-format} command: formats one or more Groovy source files, printing the
- * result to stdout by default, or rewriting files in place / just checking them.
+ * The {@code shell-format} command: formats one or more shell (sh/bash) source files, printing
+ * the result to stdout by default, or rewriting files in place / just checking them.
  */
 @Command(
-        name = "groovy-format",
+        name = "shell-format",
         mixinStandardHelpOptions = true,
-        version = "groovy-format " + GroovyFormatCommand.VERSION,
-        description = "Reformats Groovy source files.")
-public final class GroovyFormatCommand implements Callable<Integer> {
+        version = "shell-format " + ShellFormatCommand.VERSION,
+        description = "Reformats shell (sh/bash) source files.")
+public final class ShellFormatCommand implements Callable<Integer> {
 
     // Keep in sync with the `version` set in the root build.gradle.kts.
     static final String VERSION = "0.1.0-SNAPSHOT";
@@ -38,7 +38,7 @@ public final class GroovyFormatCommand implements Callable<Integer> {
             paramLabel = "FILE",
             arity = "1..*",
             description =
-                    "Groovy source files, or (with --recursive) directories to format. Pass '-' "
+                    "Shell source files, or (with --recursive) directories to format. Pass '-' "
                             + "alone to read a single source from stdin and write the formatted "
                             + "result to stdout.")
     private List<Path> paths;
@@ -63,9 +63,8 @@ public final class GroovyFormatCommand implements Callable<Integer> {
     @Option(
             names = {"-r", "--recursive"},
             description =
-                    "Recurse into directory arguments, formatting *.groovy, *.gradle, and "
-                            + "Jenkinsfile files (skips hidden directories and any directory named "
-                            + "'build').")
+                    "Recurse into directory arguments, formatting *.sh and *.bash files (skips "
+                            + "hidden directories).")
     private boolean recursive;
 
     @Option(
@@ -95,7 +94,7 @@ public final class GroovyFormatCommand implements Callable<Integer> {
     @Override
     public Integer call() {
         boolean stdin = paths.size() == 1 && isStdinMarker(paths.get(0));
-        if (!stdin && paths.stream().anyMatch(GroovyFormatCommand::isStdinMarker)) {
+        if (!stdin && paths.stream().anyMatch(ShellFormatCommand::isStdinMarker)) {
             throw new ParameterException(
                     spec.commandLine(), "'-' (stdin) cannot be combined with other files");
         }
@@ -109,7 +108,7 @@ public final class GroovyFormatCommand implements Callable<Integer> {
 
         List<Path> files;
         try {
-            files = GroovyFileFinder.find(paths, recursive);
+            files = ShellFileFinder.find(paths, recursive);
         } catch (IllegalArgumentException e) {
             throw new ParameterException(spec.commandLine(), e.getMessage());
         } catch (IOException e) {
@@ -123,7 +122,7 @@ public final class GroovyFormatCommand implements Callable<Integer> {
         for (Path file : files) {
             try {
                 String source = Files.readString(file);
-                String formatted = GroovyFormatter.format(source, renderOptions());
+                String formatted = ShellFormatter.format(source, renderOptions());
                 if (mode.check) {
                     if (!formatted.equals(source)) {
                         out.println(file);
@@ -136,15 +135,11 @@ public final class GroovyFormatCommand implements Callable<Integer> {
                 } else {
                     out.print(formatted);
                 }
-            } catch (GroovyParseException e) {
-                for (GroovyParseException.SyntaxError syntaxError : e.errors()) {
-                    err.println(
-                            file + ":" + syntaxError.line() + ":" + syntaxError.column()
-                                    + ": error: " + syntaxError.message());
-                }
+            } catch (ShellParseException e) {
+                err.println(file + ":" + e.line() + ":" + e.column() + ": error: " + e.getMessage());
                 hadProblem = true;
             } catch (IOException | UnsupportedOperationException e) {
-                err.println("groovy-format: " + file + ": " + e.getMessage());
+                err.println("shell-format: " + file + ": " + e.getMessage());
                 hadProblem = true;
             }
         }
@@ -162,7 +157,7 @@ public final class GroovyFormatCommand implements Callable<Integer> {
         PrintWriter err = spec.commandLine().getErr();
         try {
             String source = new String(System.in.readAllBytes(), StandardCharsets.UTF_8);
-            String formatted = GroovyFormatter.format(source);
+            String formatted = ShellFormatter.format(source, renderOptions());
             int exitCode = 0;
             if (mode.check) {
                 if (!formatted.equals(source)) {
@@ -174,14 +169,12 @@ public final class GroovyFormatCommand implements Callable<Integer> {
             }
             out.flush();
             return exitCode;
-        } catch (GroovyParseException e) {
-            for (GroovyParseException.SyntaxError syntaxError : e.errors()) {
-                err.println("<stdin>:" + syntaxError.line() + ":" + syntaxError.column() + ": error: " + syntaxError.message());
-            }
+        } catch (ShellParseException e) {
+            err.println("<stdin>:" + e.line() + ":" + e.column() + ": error: " + e.getMessage());
             err.flush();
             return 1;
         } catch (IOException | UnsupportedOperationException e) {
-            err.println("groovy-format: <stdin>: " + e.getMessage());
+            err.println("shell-format: <stdin>: " + e.getMessage());
             err.flush();
             return 1;
         }

@@ -13,11 +13,13 @@ import java.util.List;
 /** Public entry point: formats a Groovy source file. */
 public final class GroovyFormatter {
 
-    private static final RenderOptions OPTIONS = RenderOptions.defaults();
-
     private GroovyFormatter() {}
 
     public static String format(String source) {
+        return format(source, RenderOptions.defaults());
+    }
+
+    public static String format(String source, RenderOptions options) {
         // A shebang line (#!/usr/bin/env groovy) is lexed with `-> skip` — it never becomes a
         // token, so it's invisible to the CST and would otherwise be silently dropped, since the
         // printer builds output purely from visited nodes. The parser itself handles a shebang
@@ -28,9 +30,9 @@ public final class GroovyFormatter {
         ParsedSource parsed = GroovyCstParser.parse(source);
         List<Comment> comments = TokenStreamComments.extract(parsed.tokens());
         CommentAttacher commentAttacher = new CommentAttacher(comments);
-        Doc doc = new DocPrintingVisitor(commentAttacher, source).visitCompilationUnit(parsed.compilationUnit());
+        Doc doc = new DocPrintingVisitor(commentAttacher, source, options).visitCompilationUnit(parsed.compilationUnit());
         commentAttacher.assertAllCommentsClaimed();
-        String rendered = DocRenderer.render(doc, OPTIONS);
+        String rendered = DocRenderer.render(doc, options);
         String result = rendered.endsWith("\n") ? rendered : rendered + "\n";
         return shebang == null ? result : shebang + "\n" + result;
     }

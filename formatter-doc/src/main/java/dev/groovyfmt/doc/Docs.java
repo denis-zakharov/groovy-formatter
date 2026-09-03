@@ -42,6 +42,10 @@ public final class Docs {
         return new Doc.LineSuffix(child);
     }
 
+    public static Doc indentedVerbatim(String raw, String baseIndent) {
+        return new Doc.IndentedVerbatim(raw, baseIndent);
+    }
+
     /** Joins {@code docs} with {@code separator} placed between each pair. */
     public static Doc join(Doc separator, List<Doc> docs) {
         List<Doc> parts = new ArrayList<>();

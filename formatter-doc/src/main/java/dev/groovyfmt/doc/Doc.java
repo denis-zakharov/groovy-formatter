@@ -9,7 +9,8 @@ import java.util.List;
  */
 public sealed interface Doc
         permits Doc.Text, Doc.Concat, Doc.Line, Doc.SoftLine, Doc.HardLine,
-                Doc.Group, Doc.Indent, Doc.IfBreak, Doc.LineSuffix, Doc.BreakParent {
+                Doc.Group, Doc.Indent, Doc.IfBreak, Doc.LineSuffix, Doc.BreakParent,
+                Doc.IndentedVerbatim {
 
     /** Literal text containing no line breaks. */
     record Text(String value) implements Doc {}
@@ -43,4 +44,14 @@ public sealed interface Doc
 
     /** A marker with no text of its own that forces every enclosing group to break. */
     record BreakParent() implements Doc {}
+
+    /**
+     * Multi-line literal text (a triple-quoted string body) printed verbatim except for its own
+     * indentation: {@code raw}'s first line is emitted as-is, but every subsequent line has
+     * {@code baseIndent} — the leading whitespace of the source line the literal started on —
+     * stripped and replaced with the indentation the literal is rendered at, so the string's
+     * *relative* indentation survives being moved to a different nesting depth. Always forces
+     * every enclosing group to break, since it contains real newlines no matter the mode.
+     */
+    record IndentedVerbatim(String raw, String baseIndent) implements Doc {}
 }

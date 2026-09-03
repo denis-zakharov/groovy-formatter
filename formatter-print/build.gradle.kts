@@ -3,4 +3,5 @@ dependencies {
     implementation(project(":formatter-doc"))
     implementation(project(":formatter-parser"))
     implementation(project(":formatter-comments"))
+    implementation(project(":formatter-shell"))
 }
