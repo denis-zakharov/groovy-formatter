@@ -1487,16 +1487,18 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
      * as an {@code IndentedVerbatim}, so it both gets real shell formatting AND still tracks the
      * surrounding statement's nesting depth like any other multiline string. Returns {@code null}
      * (falling back to the plain verbatim reindent) for anything the shell formatter can't handle —
-     * a body that doesn't start on its own line, invalid/unsupported shell syntax, or Groovy
-     * interpolation the shell parser chokes on — since a `sh` step's argument isn't guaranteed to
-     * be valid shell (e.g. templated snippets), and a Jenkinsfile shouldn't fail to format over it.
+     * invalid/unsupported shell syntax, or Groovy interpolation the shell parser chokes on — since a
+     * `sh` step's argument isn't guaranteed to be valid shell (e.g. templated snippets), and a
+     * Jenkinsfile shouldn't fail to format over it.
      */
     private Doc tryPrintAsShellScript(String raw, String baseIndent) {
         String quote = raw.substring(0, 3);
         String body = raw.substring(3, raw.length() - 3);
-        if (!body.startsWith("\n")) {
-            return null;
-        }
+        // A body can start on the same line as the opening quotes (e.g. `sh '''#!/usr/bin/env
+        // bash`), rather than on its own line. The shell formatter doesn't care either way, but the
+        // rebuilt output needs to keep that first line inline after the quote instead of pushing it
+        // onto its own indented line, to match the user's original layout.
+        boolean firstLineInline = !body.startsWith("\n");
         String formatted;
         try {
             formatted = ShellFormatter.format(body, renderOptions);
@@ -1507,7 +1509,12 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         String[] lines = formatted.split("\n", -1);
         int lineCount = formatted.endsWith("\n") ? lines.length - 1 : lines.length;
         StringBuilder rebuilt = new StringBuilder(quote);
-        for (int i = 0; i < lineCount; i++) {
+        int start = 0;
+        if (firstLineInline && lineCount > 0) {
+            rebuilt.append(lines[0]);
+            start = 1;
+        }
+        for (int i = start; i < lineCount; i++) {
             rebuilt.append('\n');
             if (!lines[i].isEmpty()) {
                 rebuilt.append(bodyIndent).append(lines[i]);

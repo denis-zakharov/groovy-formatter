@@ -131,6 +131,48 @@ class GroovyFormatterMultilineStringTest {
     }
 
     @Test
+    void reformatsAShStepShellBodyWhoseFirstLineFollowsTheOpeningQuoteDirectly() {
+        // A shebang (or any other content) can sit directly after the opening ''' rather than on
+        // its own line. It must still be shell-formatted and its continuation lines indented
+        // relative to it, instead of falling back to a verbatim reindent.
+        String source =
+                """
+                pipeline {
+                    stages {
+                        stage('Build') {
+                            steps {
+                                sh '''#!/usr/bin/env bash
+                                set -euo pipefail
+                                deploy \\
+                                --env=staging \\
+                                --version=1.2.3
+                                '''
+                            }
+                        }
+                    }
+                }
+                """;
+        String expected =
+                """
+                pipeline {
+                    stages {
+                        stage('Build') {
+                            steps {
+                                sh '''#!/usr/bin/env bash
+                                    set -euo pipefail
+                                    deploy \\
+                                        --env=staging \\
+                                        --version=1.2.3
+                                '''
+                            }
+                        }
+                    }
+                }
+                """;
+        assertEquals(expected, GroovyFormatter.format(source));
+    }
+
+    @Test
     void reallyReformatsTheShellBodyOfAParenthesizedShStep() {
         // A multiline literal always forces its enclosing group to break (Doc.IndentedVerbatim),
         // so sh(...)'s argument list breaks onto its own lines too, same as it already did before
