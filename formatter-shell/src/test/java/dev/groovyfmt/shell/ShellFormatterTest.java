@@ -21,6 +21,14 @@ class ShellFormatterTest {
     }
 
     @Test
+    void preservesExplicitLineContinuations() {
+        String src = "mycli run deploy \\\n  --env=staging \\\n  --version=1.2.3 \\\n  --notify=me@example.com\n";
+        String expected =
+                "mycli run deploy \\\n    --env=staging \\\n    --version=1.2.3 \\\n    --notify=me@example.com\n";
+        assertEquals(expected, ShellFormatter.format(src));
+    }
+
+    @Test
     void andOr() {
         assertEquals("make build && make test || exit 1\n", ShellFormatter.format("make build&&make test||exit 1"));
     }

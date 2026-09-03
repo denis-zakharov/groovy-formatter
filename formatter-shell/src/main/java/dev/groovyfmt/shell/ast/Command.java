@@ -8,8 +8,16 @@ import java.util.List;
  */
 public sealed interface Command {
 
+    /**
+     * @param continuationBeforeWord parallel to {@code words}: {@code true} for a word that followed
+     *     an explicit {@code \}-newline line continuation in the source, so the printer can preserve
+     *     the author's line break instead of collapsing the command onto one line
+     */
     record SimpleCommand(
-            List<Assignment> assignments, List<Word> words, List<Redirection> redirections)
+            List<Assignment> assignments,
+            List<Word> words,
+            List<Redirection> redirections,
+            List<Boolean> continuationBeforeWord)
             implements Command {}
 
     record Assignment(String name, Word value) {}

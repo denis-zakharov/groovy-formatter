@@ -204,7 +204,8 @@ public final class Parser {
         if (cmd instanceof Command.SimpleCommand sc) {
             List<Redirection> merged = new ArrayList<>(sc.redirections());
             merged.addAll(extra);
-            return new Command.SimpleCommand(sc.assignments(), sc.words(), merged);
+            return new Command.SimpleCommand(
+                    sc.assignments(), sc.words(), merged, sc.continuationBeforeWord());
         }
         return new Command.WithRedirections(cmd, extra);
     }
@@ -422,10 +423,13 @@ public final class Parser {
         List<Command.Assignment> assignments = new ArrayList<>();
         List<Word> words = new ArrayList<>();
         List<Redirection> redirections = new ArrayList<>();
+        List<Boolean> continuationBeforeWord = new ArrayList<>();
+        int prevLine = peek().line();
 
         while (true) {
             if (isRedirectStart()) {
                 redirections.add(parseRedirection());
+                prevLine = lastTokenLine;
                 continue;
             }
             if (peek().type() != TokenType.WORD) {
@@ -435,16 +439,19 @@ public final class Parser {
                 Command.Assignment assignment = tryParseAssignment();
                 if (assignment != null) {
                     assignments.add(assignment);
+                    prevLine = lastTokenLine;
                     continue;
                 }
             }
+            continuationBeforeWord.add(peek().line() != prevLine);
             words.add(advance().word());
+            prevLine = lastTokenLine;
         }
 
         if (assignments.isEmpty() && words.isEmpty() && redirections.isEmpty()) {
             throw error("expected a command");
         }
-        return new Command.SimpleCommand(assignments, words, redirections);
+        return new Command.SimpleCommand(assignments, words, redirections, continuationBeforeWord);
     }
 
     /** {@code NAME=value}, recognized only while no command word has been seen yet. */

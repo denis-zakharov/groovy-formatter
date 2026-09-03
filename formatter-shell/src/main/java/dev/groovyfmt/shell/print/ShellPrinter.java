@@ -182,11 +182,18 @@ public final class ShellPrinter {
             parts.add(printWord(a.value()));
             first = false;
         }
-        for (Word w : sc.words()) {
+        List<Word> words = sc.words();
+        List<Boolean> continuationBeforeWord = sc.continuationBeforeWord();
+        for (int i = 0; i < words.size(); i++) {
             if (!first) {
-                parts.add(Docs.text(" "));
+                if (i < continuationBeforeWord.size() && continuationBeforeWord.get(i)) {
+                    parts.add(Docs.text(" \\"));
+                    parts.add(Docs.indent(Docs.HARDLINE));
+                } else {
+                    parts.add(Docs.text(" "));
+                }
             }
-            parts.add(printWord(w));
+            parts.add(printWord(words.get(i)));
             first = false;
         }
         for (Redirection r : sc.redirections()) {
