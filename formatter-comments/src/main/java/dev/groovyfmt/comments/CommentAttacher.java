@@ -86,6 +86,24 @@ public final class CommentAttacher {
         return items;
     }
 
+    /**
+     * Claims (and returns, in source order) every not-yet-claimed comment whose token index lies
+     * strictly between the two given token indices. For callers that position comments themselves
+     * inside a single construct (argument lists, list literals, ...) rather than between siblings.
+     */
+    public List<Comment> claimBetween(int fromTokenIndexExclusive, int toTokenIndexExclusive) {
+        List<Comment> result = new ArrayList<>();
+        for (Comment c : comments) {
+            if (c.tokenIndex() > fromTokenIndexExclusive
+                    && c.tokenIndex() < toTokenIndexExclusive
+                    && !claimedTokenIndices.contains(c.tokenIndex())) {
+                claimedTokenIndices.add(c.tokenIndex());
+                result.add(c);
+            }
+        }
+        return result;
+    }
+
     private static boolean isNestedInsideASibling(
             Comment c, List<? extends GroovyParser.GroovyParserRuleContext> siblings) {
         for (GroovyParser.GroovyParserRuleContext node : siblings) {

@@ -207,6 +207,12 @@ snappy — no JVM startup cost per invocation.
   members, preserved from the source.
 - GStrings (interpolated strings) — preserved exactly as written, including the interpolated
   expressions; the formatter never rewrites what's inside a string.
+- Multi-word command chains (`turn left then right`), try-with-resources, anonymous inner classes
+  (including enum constants with bodies), array creation (`new int[5]`, `new int[]{1, 2}`),
+  `sealed`/`permits`, record compact constructors, `@interface`, parameter default values,
+  multiple assignment (`def (a, b) = ...`, `(a, b) = ...`), explicit generic witnesses on calls,
+  initializer blocks, prefix `++`/`--`, spread map entries, and comments inside argument/list/map
+  literals and between chained calls.
 - Script-mode files (top-level statements/methods, no enclosing class) and shebang lines.
 
 ## What's not supported yet
@@ -214,13 +220,11 @@ snappy — no JVM startup cost per invocation.
 The formatter will refuse to format a file containing any of these, with a message describing
 what it hit, rather than producing incorrect output:
 
-- Multi-word command chains (`foo bar baz`, without a comma or colon).
-- try-with-resources, anonymous inner class bodies, array creation expressions (`new int[5]`).
-- `sealed`/`permits`, record compact constructors, annotation type declarations (`@interface`).
-- Parameter default values, multiple-assignment/tuple destructuring (`def (a, b) = [...]`).
-- A comment written inside a single expression or statement (comments *between* statements or
-  class members are fully supported).
-- Explicit generic type witnesses on method calls (`Collections.<String>emptyList()`).
+- A comment written inside a binary expression or other expression position that isn't an
+  argument/list/map/array-initializer element, a formal parameter, or a gap between chained calls
+  (comments *between* statements, class members, switch cases, and in those lists are supported).
+- A few rarer forms: annotations in some positions (type parameters, type arguments, `package`),
+  explicit `this` formal parameters, and the annotation-path (`@`) element.
 
 ## How it fails
 

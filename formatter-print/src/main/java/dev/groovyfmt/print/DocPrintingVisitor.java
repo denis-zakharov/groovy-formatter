@@ -14,6 +14,7 @@ import static dev.groovyfmt.doc.Docs.lineSuffix;
 import static dev.groovyfmt.doc.Docs.text;
 
 import dev.groovyfmt.comments.CommentAttacher;
+import dev.groovyfmt.comments.Comment;
 import dev.groovyfmt.doc.Doc;
 import dev.groovyfmt.doc.RenderOptions;
 import dev.groovyfmt.shell.ShellFormatter;
@@ -130,7 +131,9 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
     @Override
     public Doc visitClassDeclaration(GroovyParser.ClassDeclarationContext ctx) {
         List<Doc> header = new ArrayList<>();
-        if (ctx.CLASS() != null) {
+        if (ctx.AT() != null) {
+            header.add(text("@interface "));
+        } else if (ctx.CLASS() != null) {
             header.add(text("class "));
         } else if (ctx.INTERFACE() != null) {
             header.add(text("interface "));
@@ -141,11 +144,7 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         } else if (ctx.RECORD() != null) {
             header.add(text("record "));
         } else {
-            throw unsupported(ctx, "annotation type declarations");
-        }
-
-        if (ctx.ps != null) {
-            throw unsupported(ctx, "sealed class 'permits' clauses");
+            throw unsupported(ctx, "unknown type declaration kind");
         }
 
         header.add(text(ctx.identifier().getText()));
@@ -162,6 +161,10 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         if (ctx.is != null) {
             header.add(text(" implements "));
             header.add(printTypeList(ctx.is));
+        }
+        if (ctx.ps != null) {
+            header.add(text(" permits "));
+            header.add(printTypeList(ctx.ps));
         }
         header.add(text(" "));
         header.add(visit(ctx.classBody()));
@@ -230,18 +233,19 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
     }
 
     private Doc printEnumConstant(GroovyParser.EnumConstantContext ctx) {
-        if (ctx.anonymousInnerClassDeclaration() != null) {
-            throw unsupported(ctx, "enum constants with class bodies");
-        }
         requireNoAnnotations(ctx.annotationsOpt(), ctx);
         Doc name = text(ctx.identifier().getText());
-        return ctx.arguments() == null ? name : concat(name, printArguments(ctx.arguments()));
+        Doc result = ctx.arguments() == null ? name : concat(name, printArguments(ctx.arguments()));
+        if (ctx.anonymousInnerClassDeclaration() != null) {
+            result = concat(result, text(" "), visit(ctx.anonymousInnerClassDeclaration().classBody()));
+        }
+        return result;
     }
 
     @Override
     public Doc visitClassBodyDeclaration(GroovyParser.ClassBodyDeclarationContext ctx) {
         if (ctx.block() != null) {
-            throw unsupported(ctx, "static/instance initializer blocks");
+            return ctx.STATIC() != null ? concat(text("static "), visit(ctx.block())) : visit(ctx.block());
         }
         return visit(ctx.memberDeclaration());
     }
@@ -263,17 +267,25 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
             parts.add(visit(ctx.classDeclaration()));
             return concat(parts);
         }
-        throw unsupported(ctx, "compact constructor declarations (records)");
+        if (ctx.compactConstructorDeclaration() != null) {
+            GroovyParser.CompactConstructorDeclarationContext c = ctx.compactConstructorDeclaration();
+            List<Doc> parts = new ArrayList<>();
+            Doc modifiers = printModifiersOpt(ctx.modifiersOpt());
+            if (modifiers != null) {
+                parts.add(modifiers);
+            }
+            parts.add(text(printMethodName(c.methodName())));
+            parts.add(text(" "));
+            parts.add(visit(c.methodBody()));
+            return concat(parts);
+        }
+        throw unsupported(ctx, "unknown member declaration");
     }
 
     // ---- Methods and fields -------------------------------------------------------------------
 
     @Override
     public Doc visitMethodDeclaration(GroovyParser.MethodDeclarationContext ctx) {
-        if (ctx.DEFAULT() != null) {
-            throw unsupported(ctx, "annotation default values");
-        }
-
         List<Doc> parts = new ArrayList<>();
         Doc modifiers = printModifiersOpt(ctx.modifiersOpt());
         if (modifiers != null) {
@@ -292,6 +304,10 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         if (ctx.THROWS() != null) {
             parts.add(text(" throws "));
             parts.add(printQualifiedClassNameList(ctx.qualifiedClassNameList()));
+        }
+        if (ctx.DEFAULT() != null) {
+            parts.add(text(" default "));
+            parts.add(printElementValue(ctx.elementValue()));
         }
 
         if (ctx.methodBody() == null) {
@@ -329,12 +345,22 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
 
     @Override
     public Doc visitVariableDeclaration(GroovyParser.VariableDeclarationContext ctx) {
-        if (ctx.typeNamePairs() != null) {
-            throw unsupported(ctx, "multiple-assignment / tuple declarations");
-        }
         List<Doc> parts = new ArrayList<>();
         if (ctx.modifiers() != null) {
             parts.add(printModifiers(ctx.modifiers()));
+        }
+        if (ctx.typeNamePairs() != null) {
+            List<Doc> pairs = new ArrayList<>();
+            for (GroovyParser.TypeNamePairContext pair : ctx.typeNamePairs().typeNamePair()) {
+                Doc name = text(pair.variableDeclaratorId().identifier().getText());
+                pairs.add(pair.type() == null ? name : concat(printType(pair.type()), text(" "), name));
+            }
+            parts.add(concat(text("("), join(text(", "), pairs), text(")")));
+            if (ctx.ASSIGN() != null) {
+                parts.add(text(" = "));
+                parts.add(visit(ctx.variableInitializer()));
+            }
+            return concat(parts);
         }
         if (ctx.type() != null) {
             parts.add(printType(ctx.type()));
@@ -400,18 +426,10 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         // Unlike argument lists / list / map literals, a formal parameter list does NOT accept a
         // trailing comma in Groovy's grammar — adding one here (as those other call sites
         // correctly do) produces output that Groovy's own parser rejects on re-read.
-        return group(
-                concat(
-                        text("("),
-                        indent(concat(SOFTLINE, join(concat(text(","), LINE), paramDocs))),
-                        SOFTLINE,
-                        text(")")));
+        return printBracketedList("(", ")", ctx, list.formalParameter(), paramDocs, false);
     }
 
     private Doc printFormalParameter(GroovyParser.FormalParameterContext ctx) {
-        if (ctx.ASSIGN() != null) {
-            throw unsupported(ctx, "parameter default values");
-        }
         List<Doc> parts = new ArrayList<>();
         if (ctx.variableModifiersOpt() != null && ctx.variableModifiersOpt().variableModifiers() != null) {
             parts.add(printVariableModifiers(ctx.variableModifiersOpt().variableModifiers()));
@@ -431,6 +449,10 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         // formal parameters don't need (and don't accept) 'def' as a type placeholder the way
         // local variable/field declarations do.
         parts.add(text(ctx.variableDeclaratorId().identifier().getText()));
+        if (ctx.ASSIGN() != null) {
+            parts.add(text(" = "));
+            parts.add(visit(ctx.expression()));
+        }
         return concat(parts);
     }
 
@@ -675,11 +697,11 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
 
     @Override
     public Doc visitSwitchStatement(GroovyParser.SwitchStatementContext ctx) {
-        List<Doc> groups = new ArrayList<>();
-        for (GroovyParser.SwitchBlockStatementGroupContext g : ctx.switchBlockStatementGroup()) {
-            groups.add(printSwitchBlockStatementGroup(g));
-        }
-        return concat(text("switch "), visit(ctx.expressionInPar()), text(" "), printSwitchBody(groups));
+        return concat(
+                text("switch "),
+                visit(ctx.expressionInPar()),
+                text(" "),
+                printSwitchBody(ctx.switchBlockStatementGroup(), ctx.LBRACE(), ctx.RBRACE()));
     }
 
     private Doc printSwitchBlockStatementGroup(GroovyParser.SwitchBlockStatementGroupContext ctx) {
@@ -687,7 +709,8 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         for (GroovyParser.SwitchLabelContext label : ctx.switchLabel()) {
             labels.add(printSwitchLabel(label));
         }
-        return printSwitchGroupBody(join(HARDLINE, labels), ctx.blockStatements(), false);
+        return printSwitchGroupBody(
+                join(HARDLINE, labels), ctx.blockStatements(), ctx.switchLabel(ctx.switchLabel().size() - 1), false);
     }
 
     private Doc printSwitchLabel(GroovyParser.SwitchLabelContext ctx) {
@@ -704,11 +727,11 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
 
     @Override
     public Doc visitSwitchExpression(GroovyParser.SwitchExpressionContext ctx) {
-        List<Doc> groups = new ArrayList<>();
-        for (GroovyParser.SwitchBlockStatementExpressionGroupContext g : ctx.switchBlockStatementExpressionGroup()) {
-            groups.add(printSwitchExpressionGroup(g));
-        }
-        return concat(text("switch "), visit(ctx.expressionInPar()), text(" "), printSwitchBody(groups));
+        return concat(
+                text("switch "),
+                visit(ctx.expressionInPar()),
+                text(" "),
+                printSwitchBody(ctx.switchBlockStatementExpressionGroup(), ctx.LBRACE(), ctx.RBRACE()));
     }
 
     private Doc printSwitchExpressionGroup(GroovyParser.SwitchBlockStatementExpressionGroupContext ctx) {
@@ -719,29 +742,74 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         // A single-statement arrow case (`case 1 -> "one"`) is the conventional style and stays
         // on one line when it fits, same rationale as single-statement closures; anything more
         // must break (no implicit multi-statement-per-line separator).
-        return printSwitchGroupBody(join(HARDLINE, labels), ctx.blockStatements(), true);
+        return printSwitchGroupBody(
+                join(HARDLINE, labels),
+                ctx.blockStatements(),
+                ctx.switchExpressionLabel(ctx.switchExpressionLabel().size() - 1),
+                true);
     }
 
-    private Doc printSwitchBody(List<Doc> groups) {
-        if (groups.isEmpty()) {
+    /**
+     * Prints the braces and case groups of a switch statement/expression; comments between groups
+     * are attached like comments between statements. Groups are printed by {@link #visit}, which
+     * dispatches to the two group visitors below.
+     */
+    private Doc printSwitchBody(
+            List<? extends GroovyParser.GroovyParserRuleContext> groups,
+            groovyjarjarantlr4.v4.runtime.tree.TerminalNode lbrace,
+            groovyjarjarantlr4.v4.runtime.tree.TerminalNode rbrace) {
+        List<CommentAttacher.Item> items = commentAttacher.attach(
+                groups, lbrace.getSymbol().getTokenIndex(), rbrace.getSymbol().getTokenIndex());
+        if (items.isEmpty()) {
             return text("{}");
         }
-        return concat(text("{"), indent(concat(HARDLINE, join(HARDLINE, groups))), HARDLINE, text("}"));
+        return concat(text("{"), indent(concat(HARDLINE, printAttachedItems(items))), HARDLINE, text("}"));
+    }
+
+    @Override
+    public Doc visitSwitchBlockStatementGroup(GroovyParser.SwitchBlockStatementGroupContext ctx) {
+        return printSwitchBlockStatementGroup(ctx);
+    }
+
+    @Override
+    public Doc visitSwitchBlockStatementExpressionGroup(
+            GroovyParser.SwitchBlockStatementExpressionGroupContext ctx) {
+        return printSwitchExpressionGroup(ctx);
     }
 
     private Doc printSwitchGroupBody(
-            Doc labelsDoc, GroovyParser.BlockStatementsContext blockStatements, boolean allowInlineSingleStatement) {
+            Doc labelsDoc,
+            GroovyParser.BlockStatementsContext blockStatements,
+            GroovyParser.GroovyParserRuleContext lastLabel,
+            boolean allowInlineSingleStatement) {
         if (blockStatements == null) {
             return labelsDoc;
         }
-        List<Doc> statements = new ArrayList<>();
-        for (GroovyParser.BlockStatementContext stmt : blockStatements.blockStatement()) {
-            statements.add(visit(stmt));
+        GroovyParser.BlockStatementContext lastStatement =
+                blockStatements.blockStatement(blockStatements.blockStatement().size() - 1);
+        List<CommentAttacher.Item> items = commentAttacher.attach(
+                blockStatements.blockStatement(),
+                lastLabel.getStop().getTokenIndex(),
+                lastStatement.getStop().getTokenIndex());
+        // The group's token span can swallow comments after its last statement (they precede the
+        // next label); those belong at the label's indentation, not inside this case's body.
+        List<Doc> after = new ArrayList<>();
+        List<Doc> sameLine = new ArrayList<>();
+        for (Comment c : commentAttacher.claimBetween(
+                lastStatement.getStop().getTokenIndex(), blockStatements.getStop().getTokenIndex() + 1)) {
+            if (c.line() == lastStatement.getStop().getLine() && after.isEmpty()) {
+                sameLine.add(lineSuffix(text(" " + c.text())));
+                continue;
+            }
+            after.add(HARDLINE);
+            after.add(text(c.text()));
         }
-        if (allowInlineSingleStatement && statements.size() == 1) {
-            return group(concat(labelsDoc, indent(concat(LINE, statements.get(0)))));
+        Doc tail = concat(after);
+        Doc trailing = concat(sameLine);
+        if (allowInlineSingleStatement && items.size() == 1 && items.get(0).isNode() && after.isEmpty()) {
+            return group(concat(labelsDoc, indent(concat(LINE, printAttachedItem(items.get(0)))), trailing));
         }
-        return concat(labelsDoc, indent(concat(HARDLINE, join(HARDLINE, statements))));
+        return concat(labelsDoc, indent(concat(HARDLINE, printAttachedItems(items), trailing)), tail);
     }
 
     private Doc printSwitchExpressionLabel(GroovyParser.SwitchExpressionLabelContext ctx) {
@@ -837,11 +905,19 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
 
     @Override
     public Doc visitTryCatchStatement(GroovyParser.TryCatchStatementContext ctx) {
-        if (ctx.resources() != null) {
-            throw unsupported(ctx, "try-with-resources");
-        }
         List<Doc> parts = new ArrayList<>();
         parts.add(text("try "));
+        if (ctx.resources() != null) {
+            List<Doc> resources = new ArrayList<>();
+            for (GroovyParser.ResourceContext r : ctx.resources().resourceList().resource()) {
+                resources.add(r.localVariableDeclaration() != null
+                        ? visit(r.localVariableDeclaration())
+                        : visit(r.expression()));
+            }
+            parts.add(text("("));
+            parts.add(join(text("; "), resources));
+            parts.add(text(") "));
+        }
         parts.add(visit(ctx.block()));
         for (GroovyParser.CatchClauseContext catchClause : ctx.catchClause()) {
             parts.add(text(" "));
@@ -980,9 +1056,6 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         // multi-word chain ('foo bar baz', via commandArgument(), each argument itself able to
         // recurse into further command arguments) is a distinct, more elaborate construct still out
         // of scope.
-        if (!ctx.commandArgument().isEmpty()) {
-            throw unsupported(ctx, "multi-word command-chain expressions (e.g. 'foo bar baz')");
-        }
         Doc base = visit(ctx.expression());
         if (ctx.enhancedArgumentListInPar() == null) {
             return base;
@@ -994,7 +1067,29 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         for (GroovyParser.EnhancedArgumentListElementContext e : elements) {
             args.add(printArgumentElement(e, shellCall));
         }
-        return concat(base, text(" "), join(text(", "), args));
+        Doc result = concat(base, text(" "), join(text(", "), args));
+        // Multi-word chain ('foo bar baz', 'turn left then right'): each further command argument is
+        // a primary with optional path elements, optionally followed by its own argument list.
+        for (GroovyParser.CommandArgumentContext chained : ctx.commandArgument()) {
+            List<Doc> chainParts = new ArrayList<>();
+            chainParts.add(result);
+            chainParts.add(text(" "));
+            chainParts.add(visit(chained.primary()));
+            for (GroovyParser.PathElementContext element : chained.pathElement()) {
+                chainParts.add(printPathElement(element, false));
+            }
+            if (chained.enhancedArgumentListInPar() != null) {
+                List<Doc> chainArgs = new ArrayList<>();
+                for (GroovyParser.EnhancedArgumentListElementContext e :
+                        chained.enhancedArgumentListInPar().enhancedArgumentListElement()) {
+                    chainArgs.add(printArgumentElement(e, false));
+                }
+                chainParts.add(text(" "));
+                chainParts.add(join(text(", "), chainArgs));
+            }
+            result = concat(chainParts);
+        }
+        return result;
     }
 
     /** Whether {@code calleeText} is a bare {@code sh} call — the Jenkins pipeline shell step. */
@@ -1016,7 +1111,12 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         // The def-less form of tuple destructuring, e.g. '(a, b) = [1, 2]' — the 'def (a, b) = ...'
         // declaration form is already guarded (VariableDeclarationContext.typeNamePairs()); this is
         // the separate bare-assignment expression form, equally unsupported for now.
-        throw unsupported(ctx, "multiple-assignment / tuple destructuring");
+        List<Doc> names = new ArrayList<>();
+        for (GroovyParser.VariableDeclaratorIdContext id : ctx.variableNames().variableDeclaratorId()) {
+            names.add(text(id.identifier().getText()));
+        }
+        return concat(
+                text("("), join(text(", "), names), text(") = "), visit(ctx.statementExpression()));
     }
 
     @Override
@@ -1120,9 +1220,6 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
 
     @Override
     public Doc visitUnaryAddExprAlt(GroovyParser.UnaryAddExprAltContext ctx) {
-        if (ctx.INC() != null || ctx.DEC() != null) {
-            throw unsupported(ctx, "prefix ++/--");
-        }
         return concat(text(ctx.op.getText()), visit(ctx.expression()));
     }
 
@@ -1148,10 +1245,10 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
 
     @Override
     public Doc visitPathExpression(GroovyParser.PathExpressionContext ctx) {
-        if (ctx.STATIC() != null) {
-            throw unsupported(ctx, "'static' path-expression prefix");
-        }
         List<Doc> parts = new ArrayList<>();
+        if (ctx.STATIC() != null) {
+            parts.add(text("static "));
+        }
         parts.add(visit(ctx.primary()));
         // A bare `sh(...)` call — primary "sh" followed by exactly one pathElement that's the
         // call's parenthesized arguments — is the parenthesized form of the Jenkins shell step;
@@ -1159,10 +1256,49 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         boolean shellCall = isShellStepCalleeText(ctx.primary().getText())
                 && ctx.pathElement().size() == 1
                 && ctx.pathElement(0).arguments() != null;
+        var previousStop = ctx.primary().getStop();
         for (GroovyParser.PathElementContext element : ctx.pathElement()) {
-            parts.add(printPathElement(element, shellCall));
+            Doc printed = printPathElement(element, shellCall);
+            List<Comment> gap = commentAttacher.claimBetween(
+                    previousStop.getTokenIndex(), firstSignificantTokenIndex(element));
+            if (gap.isEmpty()) {
+                parts.add(printed);
+            } else {
+                // A comment between chained calls (`a // note` / `.b()`): keep it where it was by
+                // breaking the chain there; a same-line comment stays trailing the previous call.
+                List<Doc> chain = new ArrayList<>();
+                List<Doc> ownLine = new ArrayList<>();
+                for (Comment c : gap) {
+                    if (c.line() == previousStop.getLine() && ownLine.isEmpty()) {
+                        chain.add(lineSuffix(text(" " + c.text())));
+                    } else {
+                        ownLine.add(text(c.text()));
+                        ownLine.add(HARDLINE);
+                    }
+                }
+                chain.add(indent(concat(HARDLINE, concat(ownLine), printed)));
+                parts.add(concat(chain));
+            }
+            previousStop = element.getStop();
         }
         return concat(parts);
+    }
+
+    /** Token index of the element's first token that isn't a leading {@code nls} (newlines/comments). */
+    private static int firstSignificantTokenIndex(GroovyParser.GroovyParserRuleContext element) {
+        for (int i = 0; i < element.getChildCount(); i++) {
+            var child = element.getChild(i);
+            if (child instanceof GroovyParser.NlsContext) {
+                continue;
+            }
+            if (child instanceof GroovyParser.GroovyParserRuleContext rule) {
+                return rule.getStart().getTokenIndex();
+            }
+            if (child instanceof groovyjarjarantlr4.v4.runtime.tree.TerminalNode t) {
+                return t.getSymbol().getTokenIndex();
+            }
+        }
+        return element.getStart().getTokenIndex();
     }
 
     private Doc printPathElement(GroovyParser.PathElementContext ctx, boolean shellCall) {
@@ -1184,9 +1320,22 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
             } else if (ctx.METHOD_POINTER() != null) {
                 connector = ".&";
             } else {
-                throw unsupported(ctx, "'new'/annotation path elements");
+                throw unsupported(ctx, "annotation path elements");
             }
-            return concat(text(connector), text(printNamePart(ctx.namePart())));
+            Doc witness = ctx.nonWildcardTypeArguments() == null
+                    ? NIL
+                    : concat(text("<"), printTypeList(ctx.nonWildcardTypeArguments().typeList()), text(">"));
+            return concat(text(connector), witness, text(printNamePart(ctx.namePart())));
+        }
+        if (ctx.NEW() != null && ctx.creator() != null) {
+            return concat(text(".new "), printCreatorBody(ctx.creator()));
+        }
+        if (ctx.nonWildcardTypeArguments() != null) {
+            return concat(
+                    text(ctx.SAFE_DOT() != null ? "?." : ctx.SPREAD_DOT() != null ? "*." : "."),
+                    text("<"),
+                    printTypeList(ctx.nonWildcardTypeArguments().typeList()),
+                    text(">"));
         }
         if (ctx.indexPropertyArgs() != null) {
             return printIndexPropertyArgs(ctx.indexPropertyArgs());
@@ -1196,7 +1345,7 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
             // at all in the CST for this form; print exactly as written, no paren-adding/dropping.
             return concat(text(" "), visit(ctx.closureOrLambdaExpression()));
         }
-        throw unsupported(ctx, "named-property/new path elements");
+        throw unsupported(ctx, "named-property path elements");
     }
 
     private Doc printIndexPropertyArgs(GroovyParser.IndexPropertyArgsContext ctx) {
@@ -1256,13 +1405,7 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         for (GroovyParser.EnhancedArgumentListElementContext e : elements) {
             args.add(printArgumentElement(e, shellArg));
         }
-        return group(
-                concat(
-                        text("("),
-                        indent(concat(SOFTLINE, join(concat(text(","), LINE), args))),
-                        ifBreak(text(","), NIL),
-                        SOFTLINE,
-                        text(")")));
+        return printBracketedList("(", ")", ctx, elements, args, true);
     }
 
     private Doc printArgumentElement(GroovyParser.EnhancedArgumentListElementContext ctx, boolean shellCandidate) {
@@ -1272,12 +1415,12 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         if (ctx.mapEntry() != null) {
             return printMapEntry(ctx.mapEntry());
         }
-        throw unsupported(ctx, "lambda arguments");
+        return printStandardLambdaExpression(ctx.standardLambdaExpression());
     }
 
     private Doc printMapEntry(GroovyParser.MapEntryContext ctx) {
         if (ctx.MUL() != null) {
-            throw unsupported(ctx, "spread map entries (*:map)");
+            return concat(text("*: "), visit(ctx.expression()));
         }
         return concat(printMapEntryLabel(ctx.mapEntryLabel()), text(": "), visit(ctx.expression()));
     }
@@ -1292,7 +1435,7 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
     @Override
     public Doc visitIdentifierPrmrAlt(GroovyParser.IdentifierPrmrAltContext ctx) {
         if (ctx.typeArguments() != null) {
-            throw unsupported(ctx, "explicit generic type arguments on identifiers");
+            return concat(text(ctx.identifier().getText()), printTypeArguments(ctx.typeArguments()));
         }
         return text(ctx.identifier().getText());
     }
@@ -1328,17 +1471,48 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
     }
 
     private Doc printCreator(GroovyParser.CreatorContext ctx) {
-        if (ctx.anonymousInnerClassDeclaration() != null) {
-            throw unsupported(ctx, "anonymous inner class bodies");
-        }
-        if (!ctx.dim().isEmpty() || ctx.arrayInitializer() != null) {
-            throw unsupported(ctx, "array creation expressions");
-        }
+        return concat(text("new "), printCreatorBody(ctx));
+    }
+
+    /** Everything after the {@code new} keyword: created name plus arguments / dims / class body. */
+    private Doc printCreatorBody(GroovyParser.CreatorContext ctx) {
         GroovyParser.CreatedNameContext name = ctx.createdName();
+        requireNoAnnotations(name.annotationsOpt(), name);
         String typeName =
                 name.primitiveType() != null ? name.primitiveType().getText() : name.qualifiedClassName().getText();
         Doc typeArgs = name.typeArgumentsOrDiamond() == null ? NIL : printTypeArgumentsOrDiamond(name.typeArgumentsOrDiamond());
-        return concat(text("new "), text(typeName), typeArgs, printArguments(ctx.arguments()));
+        if (!ctx.dim().isEmpty() || ctx.arrayInitializer() != null) {
+            List<Doc> parts = new ArrayList<>();
+            parts.add(text(typeName));
+            parts.add(typeArgs);
+            for (GroovyParser.DimContext dim : ctx.dim()) {
+                requireNoAnnotations(dim.annotationsOpt(), dim);
+                parts.add(dim.expression() == null
+                        ? text("[]")
+                        : concat(text("["), visit(dim.expression()), text("]")));
+            }
+            if (ctx.arrayInitializer() != null) {
+                parts.add(printArrayInitializer(ctx.arrayInitializer()));
+            }
+            return concat(parts);
+        }
+        Doc result = concat(text(typeName), typeArgs, printArguments(ctx.arguments()));
+        if (ctx.anonymousInnerClassDeclaration() != null) {
+            result = concat(result, text(" "), visit(ctx.anonymousInnerClassDeclaration().classBody()));
+        }
+        return result;
+    }
+
+    private Doc printArrayInitializer(GroovyParser.ArrayInitializerContext ctx) {
+        if (ctx.variableInitializers() == null) {
+            return text("{}");
+        }
+        List<Doc> elements = new ArrayList<>();
+        for (GroovyParser.VariableInitializerContext v : ctx.variableInitializers().variableInitializer()) {
+            elements.add(visit(v));
+        }
+        return printBracketedList(
+                "{", "}", ctx, ctx.variableInitializers().variableInitializer(), elements, false);
     }
 
     private Doc printTypeArgumentsOrDiamond(GroovyParser.TypeArgumentsOrDiamondContext ctx) {
@@ -1358,13 +1532,8 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         for (GroovyParser.ExpressionListElementContext e : ctx.expressionList().expressionListElement()) {
             elements.add(printExpressionListElement(e));
         }
-        return group(
-                concat(
-                        text("["),
-                        indent(concat(SOFTLINE, join(concat(text(","), LINE), elements))),
-                        ifBreak(text(","), NIL),
-                        SOFTLINE,
-                        text("]")));
+        return printBracketedList(
+                "[", "]", ctx, ctx.expressionList().expressionListElement(), elements, true);
     }
 
     @Override
@@ -1380,13 +1549,7 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
         for (GroovyParser.MapEntryContext e : ctx.mapEntryList().mapEntry()) {
             entries.add(printMapEntry(e));
         }
-        return group(
-                concat(
-                        text("["),
-                        indent(concat(SOFTLINE, join(concat(text(","), LINE), entries))),
-                        ifBreak(text(","), NIL),
-                        SOFTLINE,
-                        text("]")));
+        return printBracketedList("[", "]", ctx, ctx.mapEntryList().mapEntry(), entries, true);
     }
 
     @Override
@@ -1561,6 +1724,80 @@ final class DocPrintingVisitor extends GroovyParserBaseVisitor<Doc> {
 
     private Doc binaryDoc(Doc left, String op, Doc right) {
         return group(concat(left, text(" " + op), indent(concat(LINE, right))));
+    }
+
+    // ---- Comments nested inside a bracketed construct ------------------------------------------
+
+    /**
+     * Prints {@code open elements... close} as a group that wraps when too long. Comments sitting in
+     * the gaps between the elements (or between a bracket and its first/last element) are claimed
+     * here and force the list onto one element per line: a same-line comment after an element
+     * stays trailing it, any other comment goes on its own line before the next element.
+     */
+    private Doc printBracketedList(
+            String open,
+            String close,
+            GroovyParser.GroovyParserRuleContext whole,
+            List<? extends GroovyParser.GroovyParserRuleContext> elements,
+            List<Doc> docs,
+            boolean trailingComma) {
+        int n = elements.size();
+        List<List<Comment>> leading = new ArrayList<>();
+        List<List<Comment>> trailing = new ArrayList<>();
+        List<Comment> dangling = new ArrayList<>();
+        boolean any = false;
+        for (int i = 0; i < n; i++) {
+            leading.add(new ArrayList<>());
+            trailing.add(new ArrayList<>());
+        }
+        if (n > 0 && whole.getStart() != null && whole.getStop() != null) {
+            for (int i = 0; i <= n; i++) {
+                int from = i == 0 ? whole.getStart().getTokenIndex() : elements.get(i - 1).getStop().getTokenIndex();
+                int to = i == n ? whole.getStop().getTokenIndex() : elements.get(i).getStart().getTokenIndex();
+                int prevLine = i == 0 ? -1 : elements.get(i - 1).getStop().getLine();
+                for (Comment c : commentAttacher.claimBetween(from, to)) {
+                    any = true;
+                    if (i > 0 && c.line() == prevLine) {
+                        trailing.get(i - 1).add(c);
+                    } else if (i == n) {
+                        dangling.add(c);
+                    } else {
+                        leading.get(i).add(c);
+                    }
+                }
+            }
+        }
+        if (!any) {
+            return group(
+                    concat(
+                            text(open),
+                            indent(concat(SOFTLINE, join(concat(text(","), LINE), docs))),
+                            trailingComma ? ifBreak(text(","), NIL) : NIL,
+                            SOFTLINE,
+                            text(close)));
+        }
+        List<Doc> body = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            if (i > 0) {
+                body.add(HARDLINE);
+            }
+            for (Comment c : leading.get(i)) {
+                body.add(text(c.text()));
+                body.add(HARDLINE);
+            }
+            body.add(docs.get(i));
+            if (i < n - 1 || trailingComma) {
+                body.add(text(","));
+            }
+            for (Comment c : trailing.get(i)) {
+                body.add(lineSuffix(text(" " + c.text())));
+            }
+        }
+        for (Comment c : dangling) {
+            body.add(HARDLINE);
+            body.add(text(c.text()));
+        }
+        return concat(text(open), indent(concat(HARDLINE, concat(body))), HARDLINE, text(close));
     }
 
     // ---- Comment/blank-line interleaving --------------------------------------------------------

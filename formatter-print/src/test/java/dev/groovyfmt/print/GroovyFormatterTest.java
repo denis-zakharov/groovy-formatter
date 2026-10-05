@@ -193,8 +193,8 @@ class GroovyFormatterTest {
     }
 
     @Test
-    void throwsAClearErrorForACommentInsideAStatementInsteadOfMisplacingIt() {
-        String source = "class Foo {\n    def bar() {\n        int x = foo(/* nested */ 1)\n    }\n}\n";
+    void throwsAClearErrorForACommentInsideABinaryExpressionInsteadOfMisplacingIt() {
+        String source = "class Foo {\n    def bar() {\n        int x = 1 + /* nested */ 2\n    }\n}\n";
         UnsupportedOperationException e =
                 org.junit.jupiter.api.Assertions.assertThrows(
                         UnsupportedOperationException.class, () -> GroovyFormatter.format(source));
@@ -245,14 +245,10 @@ class GroovyFormatterTest {
     }
 
     @Test
-    void throwsAClearErrorForAMultiWordCommandChainStillOutOfScope() {
-        // 'foo bar baz' (no comma, no colon) is the true multi-word command chain — a distinct,
-        // more elaborate grammar path (commandArgument()) than the paren-less named/positional
-        // argument shorthand ('foo bar: 1' / 'foo bar, baz'), which Phase 4 does support.
-        String source = "class Foo {\n  def bar() {\n    foo bar baz\n  }\n}\n";
-        UnsupportedOperationException e =
-                org.junit.jupiter.api.Assertions.assertThrows(
-                        UnsupportedOperationException.class, () -> GroovyFormatter.format(source));
-        org.junit.jupiter.api.Assertions.assertTrue(e.getMessage().contains("multi-word command-chain"));
+    void formatsAMultiWordCommandChain() {
+        String source = "class Foo {\n  def bar() {\n    foo   bar baz\n    turn left then right\n  }\n}\n";
+        assertEquals(
+                "class Foo {\n    def bar() {\n        foo bar baz\n        turn left then right\n    }\n}\n",
+                GroovyFormatter.format(source));
     }
 }

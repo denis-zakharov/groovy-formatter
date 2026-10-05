@@ -163,14 +163,14 @@ class GroovyFormatterPhase5Test {
     }
 
     @Test
-    void throwsAClearErrorForSealedPermitsRatherThanCrashing() {
-        String source = "sealed class Shape permits Circle, Square {\n}\n";
-        assertThrows(UnsupportedOperationException.class, () -> GroovyFormatter.format(source));
+    void formatsSealedPermits() {
+        String source = "sealed class Shape permits Circle, Square {}\n";
+        assertEquals(source, GroovyFormatter.format(source));
     }
 
     @Test
-    void throwsAClearErrorForCompactConstructorsRatherThanCrashing() {
-        String source = "record Point(int x, int y) {\n    Point {\n    }\n}\n";
-        assertThrows(UnsupportedOperationException.class, () -> GroovyFormatter.format(source));
+    void formatsCompactConstructors() {
+        String source = "record Point(int x, int y) {\n    Point {\n        assert x >= 0\n    }\n}\n";
+        assertEquals(source, GroovyFormatter.format(source));
     }
 }

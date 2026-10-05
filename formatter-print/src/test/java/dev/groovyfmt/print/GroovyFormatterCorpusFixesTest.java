@@ -124,10 +124,8 @@ class GroovyFormatterCorpusFixesTest {
     }
 
     @Test
-    void throwsAClearErrorForDefLessMultipleAssignmentRatherThanMisformatting() {
-        String source = "class Foo {\n  def bar() {\n    def x\n    def y\n    (x, y) = [1, 2]\n  }\n}\n";
-        UnsupportedOperationException e =
-                assertThrows(UnsupportedOperationException.class, () -> GroovyFormatter.format(source));
-        org.junit.jupiter.api.Assertions.assertTrue(e.getMessage().contains("tuple destructuring"));
+    void formatsDefLessMultipleAssignment() {
+        String source = "def x\ndef y\n(x, y) = [1, 2]\n";
+        assertEquals(source, GroovyFormatter.format(source));
     }
 }

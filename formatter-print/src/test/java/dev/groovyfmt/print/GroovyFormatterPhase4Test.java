@@ -231,23 +231,20 @@ class GroovyFormatterPhase4Test {
     }
 
     @Test
-    void throwsAClearErrorForAMultiWordCommandChain() {
-        String source = "class Foo {\n  def bar() {\n    foo bar baz\n  }\n}\n";
-        UnsupportedOperationException e =
-                assertThrows(UnsupportedOperationException.class, () -> GroovyFormatter.format(source));
-        assertTrue(e.getMessage().contains("multi-word command-chain"));
+    void formatsAMultiWordCommandChain() {
+        String source = "def x() {\n    foo bar baz\n}\n";
+        assertEquals(source, GroovyFormatter.format("def x() {\n  foo bar   baz\n}\n"));
     }
 
     @Test
-    void throwsAClearErrorForTryWithResourcesRatherThanCrashing() {
-        String source =
-                "class Foo {\n  def bar() {\n    try (def x = open()) {\n      use(x)\n    }\n  }\n}\n";
-        assertThrows(UnsupportedOperationException.class, () -> GroovyFormatter.format(source));
+    void formatsTryWithResources() {
+        String source = "def bar() {\n    try (def x = open(); y) {\n        use(x)\n    }\n}\n";
+        assertEquals(source, GroovyFormatter.format(source));
     }
 
     @Test
-    void throwsAClearErrorForAnonymousInnerClassesRatherThanCrashing() {
-        String source = "class Foo {\n  def bar() {\n    def r = new Runnable() {\n      void run() {}\n    }\n  }\n}\n";
-        assertThrows(UnsupportedOperationException.class, () -> GroovyFormatter.format(source));
+    void formatsAnonymousInnerClasses() {
+        String source = "def r = new Runnable() {\n    void run() {}\n}\n";
+        assertEquals(source, GroovyFormatter.format(source));
     }
 }

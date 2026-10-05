@@ -241,13 +241,13 @@ used throughout, and should be used again for any new grammar area:
 
 ## What's out of scope (throws a clear `UnsupportedOperationException`, verified not to crash)
 
-Multi-word command chains (`foo bar baz`, no comma/colon), try-with-resources, anonymous inner
-class bodies, array creation expressions (`new int[5]`), `sealed`/`permits`, record compact
-constructors, parameter default values, comments nested inside a single expression/statement
-(only comments *between* statements/members are attached — see `CommentAttacher`), explicit
-generic type witnesses on calls (`Collections.<String>emptyList()`), multiple-assignment/tuple
-destructuring (`def (a, b) = [...]` and the def-less form), annotation type declarations
-(`@interface Foo {}`).
+Comments inside an expression position that isn't covered by `printBracketedList` (argument/list/
+map/array-initializer elements, formal parameters), the gap between chained path elements, or
+switch-case groups — e.g. inside a binary expression or before `else`. `CommentAttacher.
+assertAllCommentsClaimed()` catches these. Comments in the supported nested positions are claimed
+by `CommentAttacher.claimBetween(...)` and force the enclosing list to one element per line.
+Also unsupported: explicit `this` formal parameters, annotations on type parameters/arguments and
+the `@` path element.
 
 ## Testing
 
