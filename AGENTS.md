@@ -277,7 +277,7 @@ the `@` path element.
 ./gradlew :formatter-cli:run --args="-r --check src"            # CI-style check over a directory
 ```
 
-Java 17 toolchain (set per-module via the root `build.gradle.kts` `subprojects {}` block). Pinned
+Java 25 toolchain (set per-module via the root `build.gradle.kts` `subprojects {}` block). Pinned
 Groovy version: `4.0.29` (see `formatter-parser/build.gradle.kts`) — bump deliberately, and
 re-verify the "load-bearing facts" above (especially the shading assumption and the `*AltContext`
 audit) against the new jar before trusting it.
